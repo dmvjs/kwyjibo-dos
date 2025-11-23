@@ -66,6 +66,7 @@ export interface PlayerState {
   canSkipForward: boolean;
   mannieFreshMode: boolean;
   activeHiddenTrack: 3 | 4 | null; // Which MF track is currently playing
+  eightZeroEightMode: boolean; // 808 Mode - frequency split & rhythmic recombination
 }
 
 /**
@@ -120,6 +121,17 @@ export class HamiltonianPlayer {
   private readonly MAX_SCHEDULED_PAIRS = 1; // Limit scheduling to prevent memory issues on iOS
   private qrng: QuantumRandom; // Quantum random number generator for true randomness
 
+  // 808 Mode - Frequency splitting for deconstructed beats
+  private eightZeroEightMode: boolean = false;
+  private track1Filters: { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode } | null = null;
+  private track2Filters: { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode } | null = null;
+  private track3Filters: { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode } | null = null;
+  private track4Filters: { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode } | null = null;
+  private rhythmicGainNodes: GainNode[] = []; // For rhythmic gating in 808 mode
+  private rhythmicPatternInterval: number | null = null; // Interval for rhythmic pattern automation
+  private eightZeroEightCompressor: DynamicsCompressorNode | null = null; // Dedicated compressor for 808 mode
+  private eightZeroEightMakeupGain: GainNode | null = null; // Makeup gain to compensate for frequency splitting
+
   constructor(songs: Song[], initialKey?: Key, initialTempo?: Tempo) {
     this.songs = songs;
     this.qrng = new QuantumRandom();
@@ -155,6 +167,7 @@ export class HamiltonianPlayer {
       canSkipForward: true,
       mannieFreshMode: false,
       activeHiddenTrack: null,
+      eightZeroEightMode: false,
     };
   }
 
@@ -379,7 +392,11 @@ export class HamiltonianPlayer {
 
     const now = this.audioContext.currentTime;
 
-    if (this.mannieFreshMode) {
+    if (this.eightZeroEightMode) {
+      // In 808 mode, all tracks play at full volume (routing is handled by 808 processing)
+      this.track3Gain.gain.setTargetAtTime(1.0, now, 0.015);
+      this.track4Gain.gain.setTargetAtTime(1.0, now, 0.015);
+    } else if (this.mannieFreshMode) {
       // Apply volume setting to the active hidden track, silent for the inactive one
       const gain3 = this.currentHiddenTrack === 3 ? this.mannieFreshVolume : 0;
       const gain4 = this.currentHiddenTrack === 4 ? this.mannieFreshVolume : 0;
@@ -387,7 +404,7 @@ export class HamiltonianPlayer {
       this.track3Gain.gain.setTargetAtTime(gain3, now, 0.015);
       this.track4Gain.gain.setTargetAtTime(gain4, now, 0.015);
     } else {
-      // Silent when mode is off
+      // Silent when both modes are off
       this.track3Gain.gain.setTargetAtTime(0, now, 0.015);
       this.track4Gain.gain.setTargetAtTime(0, now, 0.015);
     }
@@ -435,8 +452,14 @@ export class HamiltonianPlayer {
   /**
    * Toggle Mannie Fresh mode on/off.
    * When enabled, two hidden tracks play at full volume, alternating every 8 bars.
+   * Mutually exclusive with 808 mode.
    */
   toggleMannieFreshMode(): void {
+    // If turning on MF mode, turn off 808 mode
+    if (!this.mannieFreshMode && this.eightZeroEightMode) {
+      this.toggle808Mode();
+    }
+
     this.mannieFreshMode = !this.mannieFreshMode;
     this.updateHiddenTrackGains();
     this.updateState({
@@ -452,6 +475,319 @@ export class HamiltonianPlayer {
 
     // Note: Switching is handled by the beat-synced interval set up when the pair starts.
     // No need to create a new interval here - just let the existing one handle it.
+  }
+
+  /**
+   * Toggle 808 mode on/off.
+   * When enabled, the four tracks are frequency-split and rhythmically recombined
+   * to create a new deconstructed beat that sounds cohesive but entirely different.
+   * Mutually exclusive with Mannie Fresh mode.
+   */
+  toggle808Mode(): void {
+    // If turning on 808 mode, turn off MF mode
+    if (!this.eightZeroEightMode && this.mannieFreshMode) {
+      this.toggleMannieFreshMode();
+    }
+
+    this.eightZeroEightMode = !this.eightZeroEightMode;
+
+    if (this.eightZeroEightMode) {
+      console.log('🥁 808 Mode ACTIVATED - Frequency split & rhythmic recombination engaged');
+      this.updateHiddenTrackGains(); // Enable tracks 3 & 4
+      this.apply808Processing();
+      this.startRhythmicGating();
+    } else {
+      console.log('🥁 808 Mode DEACTIVATED');
+      this.remove808Processing();
+      this.stopRhythmicGating();
+      this.updateHiddenTrackGains(); // Disable tracks 3 & 4
+    }
+
+    this.updateState({
+      eightZeroEightMode: this.eightZeroEightMode,
+    });
+  }
+
+  /**
+   * Apply 808 mode frequency splitting and routing.
+   * Splits each track into LOW/MID/HIGH frequency bands and routes them
+   * to create a deconstructed beat.
+   */
+  private apply808Processing(): void {
+    if (!this.audioContext || !this.track1Gain || !this.track2Gain || !this.track3Gain || !this.track4Gain) {
+      console.warn('⚠️ Cannot apply 808 processing - audio context not initialized');
+      return;
+    }
+
+    console.log('🔊 Setting up frequency splitting for 808 mode...');
+
+    // Create filter banks for each track
+    // Each track gets: LOW (20-250Hz), MID (250-3000Hz), HIGH (3000-20000Hz)
+    this.track1Filters = this.createFilterBank();
+    this.track2Filters = this.createFilterBank();
+    this.track3Filters = this.createFilterBank();
+    this.track4Filters = this.createFilterBank();
+
+    // Rewire the audio graph with 808 processing
+    this.reconnectWith808Processing();
+
+    console.log('✅ 808 Mode frequency splitting active');
+  }
+
+  /**
+   * Remove 808 mode processing and restore normal routing.
+   */
+  private remove808Processing(): void {
+    console.log('🔌 Removing 808 mode processing...');
+
+    // Disconnect and clear rhythmic gain nodes
+    for (const node of this.rhythmicGainNodes) {
+      if (node) {
+        try {
+          node.disconnect();
+        } catch (e) {
+          // Already disconnected
+        }
+      }
+    }
+    this.rhythmicGainNodes = [];
+
+    // Disconnect and clear 808 compressor and makeup gain
+    if (this.eightZeroEightCompressor) {
+      try {
+        this.eightZeroEightCompressor.disconnect();
+      } catch (e) {
+        // Already disconnected
+      }
+      this.eightZeroEightCompressor = null;
+    }
+
+    if (this.eightZeroEightMakeupGain) {
+      try {
+        this.eightZeroEightMakeupGain.disconnect();
+      } catch (e) {
+        // Already disconnected
+      }
+      this.eightZeroEightMakeupGain = null;
+    }
+
+    // Clear filter banks
+    this.track1Filters = null;
+    this.track2Filters = null;
+    this.track3Filters = null;
+    this.track4Filters = null;
+
+    // Restore normal routing: disconnect gain nodes and reconnect to master
+    if (this.track1Gain && this.track2Gain && this.track3Gain && this.track4Gain && this.masterCompressor) {
+      try {
+        this.track1Gain.disconnect();
+        this.track2Gain.disconnect();
+        this.track3Gain.disconnect();
+        this.track4Gain.disconnect();
+      } catch (e) {
+        // Already disconnected
+      }
+
+      // Reconnect directly to master compressor (normal routing)
+      this.track1Gain.connect(this.masterCompressor);
+      this.track2Gain.connect(this.masterCompressor);
+      this.track3Gain.connect(this.masterCompressor);
+      this.track4Gain.connect(this.masterCompressor);
+    }
+
+    console.log('✅ Normal audio routing restored');
+  }
+
+  /**
+   * Create a filter bank with LOW/MID/HIGH bands.
+   */
+  private createFilterBank(): { low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode } {
+    if (!this.audioContext) {
+      throw new Error('AudioContext not initialized');
+    }
+
+    // LOW: 20-250Hz (bass, kick, 808)
+    const lowFilter = this.audioContext.createBiquadFilter();
+    lowFilter.type = 'lowpass';
+    lowFilter.frequency.setValueAtTime(250, this.audioContext.currentTime);
+    lowFilter.Q.setValueAtTime(1, this.audioContext.currentTime);
+
+    // MID: 250-3000Hz (snare, melody, vocals)
+    const midFilter = this.audioContext.createBiquadFilter();
+    midFilter.type = 'bandpass';
+    midFilter.frequency.setValueAtTime(1000, this.audioContext.currentTime); // Center freq
+    midFilter.Q.setValueAtTime(0.7, this.audioContext.currentTime); // Wider band
+
+    // HIGH: 3000-20000Hz (hi-hats, cymbals, air)
+    const highFilter = this.audioContext.createBiquadFilter();
+    highFilter.type = 'highpass';
+    highFilter.frequency.setValueAtTime(3000, this.audioContext.currentTime);
+    highFilter.Q.setValueAtTime(1, this.audioContext.currentTime);
+
+    return { low: lowFilter, mid: midFilter, high: highFilter };
+  }
+
+  /**
+   * Reconnect audio sources with 808 processing.
+   * This creates a new beat by taking different frequency bands from different tracks.
+   *
+   * 808 Mix Strategy:
+   * - Track 1 LOW → Bass/kick foundation
+   * - Track 2 MID → Melody/snare elements
+   * - Track 3 HIGH → Hi-hats/cymbals/texture
+   * - Track 4 LOW → Additional bass texture (at reduced volume)
+   */
+  private reconnectWith808Processing(): void {
+    if (!this.audioContext || !this.masterCompressor) return;
+    if (!this.track1Filters || !this.track2Filters || !this.track3Filters || !this.track4Filters) return;
+    if (!this.track1Gain || !this.track2Gain || !this.track3Gain || !this.track4Gain) return;
+
+    // Disconnect gain nodes from master (we'll reconnect filtered paths)
+    try {
+      this.track1Gain.disconnect();
+      this.track2Gain.disconnect();
+      this.track3Gain.disconnect();
+      this.track4Gain.disconnect();
+    } catch (e) {
+      // Already disconnected, that's fine
+    }
+
+    // Create mix buses for the deconstructed beat
+    const lowBus = this.audioContext.createGain();
+    const midBus = this.audioContext.createGain();
+    const highBus = this.audioContext.createGain();
+
+    // Set bus levels - boosted for louder output
+    lowBus.gain.setValueAtTime(1.3, this.audioContext.currentTime); // Strong bass
+    midBus.gain.setValueAtTime(1.2, this.audioContext.currentTime); // Strong mids
+    highBus.gain.setValueAtTime(1.1, this.audioContext.currentTime); // Boosted highs
+
+    // Create dedicated 808 compressor for aggressive compression
+    this.eightZeroEightCompressor = this.audioContext.createDynamicsCompressor();
+    this.eightZeroEightCompressor.threshold.setValueAtTime(-24, this.audioContext.currentTime); // Lower threshold
+    this.eightZeroEightCompressor.knee.setValueAtTime(30, this.audioContext.currentTime); // Soft knee
+    this.eightZeroEightCompressor.ratio.setValueAtTime(12, this.audioContext.currentTime); // Aggressive ratio
+    this.eightZeroEightCompressor.attack.setValueAtTime(0.001, this.audioContext.currentTime); // Fast attack
+    this.eightZeroEightCompressor.release.setValueAtTime(0.1, this.audioContext.currentTime); // Quick release
+
+    // Create makeup gain to compensate for frequency splitting losses
+    this.eightZeroEightMakeupGain = this.audioContext.createGain();
+    this.eightZeroEightMakeupGain.gain.setValueAtTime(2.5, this.audioContext.currentTime); // +8dB makeup gain
+
+    // Route: Track 1's bass + Track 4's bass → LOW BUS
+    this.track1Gain.connect(this.track1Filters.low);
+    this.track1Filters.low.connect(lowBus);
+
+    // Track 4 bass (blended at lower volume for texture)
+    const track4LowGain = this.audioContext.createGain();
+    track4LowGain.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+    this.track4Gain.connect(this.track4Filters.low);
+    this.track4Filters.low.connect(track4LowGain);
+    track4LowGain.connect(lowBus);
+
+    // Route: Track 2's mids → MID BUS
+    this.track2Gain.connect(this.track2Filters.mid);
+    this.track2Filters.mid.connect(midBus);
+
+    // Route: Track 3's highs → HIGH BUS
+    this.track3Gain.connect(this.track3Filters.high);
+    this.track3Filters.high.connect(highBus);
+
+    // Connect all buses through dedicated 808 compressor → makeup gain → master compressor
+    lowBus.connect(this.eightZeroEightCompressor);
+    midBus.connect(this.eightZeroEightCompressor);
+    highBus.connect(this.eightZeroEightCompressor);
+
+    this.eightZeroEightCompressor.connect(this.eightZeroEightMakeupGain);
+    this.eightZeroEightMakeupGain.connect(this.masterCompressor);
+
+    // Store references for cleanup
+    this.rhythmicGainNodes = [lowBus, midBus, highBus];
+
+    console.log('🎛️ 808 Mode routing: T1(LOW) + T2(MID) + T3(HIGH) + T4(LOW) → 808 Compressor (+8dB makeup)');
+  }
+
+  /**
+   * Start rhythmic gating patterns for 808 mode.
+   * Creates pulsing patterns that bring elements in/out rhythmically.
+   */
+  private startRhythmicGating(): void {
+    if (!this.audioContext) return;
+
+    const tempo = this.state.tempo;
+    const beatDuration = 60 / tempo; // Duration of one beat in seconds
+
+    // Stop any existing pattern
+    this.stopRhythmicGating();
+
+    console.log(`🎵 Starting rhythmic gating at ${tempo} BPM (${beatDuration.toFixed(3)}s per beat)`);
+
+    let patternStep = 0;
+
+    // Rhythmic pattern automation
+    const updatePattern = (): void => {
+      if (!this.audioContext || this.rhythmicGainNodes.length === 0) return;
+
+      const [lowBus, midBus, highBus] = this.rhythmicGainNodes;
+      if (!lowBus || !midBus || !highBus) return;
+
+      const now = this.audioContext.currentTime;
+      const rampTime = beatDuration * 0.25; // Smooth ramps
+
+      // Pattern: 16-step sequence (4 bars)
+      // LOW: Steady pulse on 1 and 3 of each bar
+      // MID: Syncopated - on 2 and 4, plus 16th note fills
+      // HIGH: Constant with subtle ducking
+
+      const beatInPattern = patternStep % 16;
+
+      // LOW pattern (kicks on 1, 5, 9, 13)
+      if (beatInPattern % 4 === 0) {
+        lowBus.gain.setTargetAtTime(1.0, now, rampTime);
+      } else {
+        lowBus.gain.setTargetAtTime(0.6, now, rampTime);
+      }
+
+      // MID pattern (snares/claps on 4, 8, 12, 16)
+      if (beatInPattern === 3 || beatInPattern === 7 || beatInPattern === 11 || beatInPattern === 15) {
+        midBus.gain.setTargetAtTime(1.0, now, rampTime);
+      } else {
+        midBus.gain.setTargetAtTime(0.5, now, rampTime);
+      }
+
+      // HIGH pattern (hi-hats - constant with subtle pulse)
+      const highLevel = 0.7 + Math.sin(patternStep * 0.5) * 0.15;
+      highBus.gain.setTargetAtTime(highLevel, now, rampTime);
+
+      patternStep++;
+    };
+
+    // Update pattern every beat
+    this.rhythmicPatternInterval = window.setInterval(updatePattern, beatDuration * 1000);
+    updatePattern(); // Initial update
+
+    console.log('✅ Rhythmic gating started');
+  }
+
+  /**
+   * Stop rhythmic gating.
+   */
+  private stopRhythmicGating(): void {
+    if (this.rhythmicPatternInterval !== null) {
+      clearInterval(this.rhythmicPatternInterval);
+      this.rhythmicPatternInterval = null;
+      console.log('⏹️ Rhythmic gating stopped');
+    }
+
+    // Reset gain nodes to default levels
+    if (this.rhythmicGainNodes.length > 0 && this.audioContext) {
+      const now = this.audioContext.currentTime;
+      for (const node of this.rhythmicGainNodes) {
+        if (node) {
+          node.gain.setValueAtTime(1.0, now);
+        }
+      }
+    }
   }
 
   /**

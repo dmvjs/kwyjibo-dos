@@ -109,6 +109,10 @@ function App(): React.ReactElement {
     player.toggleMannieFreshMode();
   };
 
+  const handle808Toggle = (): void => {
+    player.toggle808Mode();
+  };
+
   return (
     <div className="app">
       {/* Playback Controls - Top */}
@@ -169,6 +173,18 @@ function App(): React.ReactElement {
               <span className="slider"></span>
             </label>
           </div>
+          {/* 808 Mode Toggle */}
+          <div className="mf-toggle-container" style={{ paddingLeft: '16px' }}>
+            <span className="mf-label">808</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={playerState.eightZeroEightMode}
+                onChange={handle808Toggle}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -191,7 +207,11 @@ function App(): React.ReactElement {
             <div className="track-key">{KEY_NAMES[playerState.currentPair.track2.song.key - 1]}</div>
           </div>
           {playerState.currentPair.track3 && (
-            <div className={`track-row compact ${!playerState.mannieFreshMode || (playerState.mannieFreshMode && playerState.activeHiddenTrack !== 3) ? 'inactive-mf' : ''}`}>
+            <div className={`track-row compact ${
+              playerState.eightZeroEightMode
+                ? ''
+                : (!playerState.mannieFreshMode || (playerState.mannieFreshMode && playerState.activeHiddenTrack !== 3) ? 'inactive-mf' : '')
+            }`}>
               <div className="track-num">3</div>
               <div className="track-info-compact">
                 {playerState.currentPair.track3.song.artist} - {playerState.currentPair.track3.song.title}
@@ -200,7 +220,11 @@ function App(): React.ReactElement {
             </div>
           )}
           {playerState.currentPair.track4 && (
-            <div className={`track-row compact ${!playerState.mannieFreshMode || (playerState.mannieFreshMode && playerState.activeHiddenTrack !== 4) ? 'inactive-mf' : ''}`}>
+            <div className={`track-row compact ${
+              playerState.eightZeroEightMode
+                ? ''
+                : (!playerState.mannieFreshMode || (playerState.mannieFreshMode && playerState.activeHiddenTrack !== 4) ? 'inactive-mf' : '')
+            }`}>
               <div className="track-num">4</div>
               <div className="track-info-compact">
                 {playerState.currentPair.track4.song.artist} - {playerState.currentPair.track4.song.title}
