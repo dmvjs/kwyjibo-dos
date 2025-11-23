@@ -13,8 +13,9 @@
  */
 
 import type { Song, Key, Tempo, TrackType } from '../../src/music/types';
-import { BEAT_COUNTS, ALL_KEYS, ALL_TEMPOS } from '../../src/music/types';
+import { BEAT_COUNTS, ALL_TEMPOS } from '../../src/music/types';
 import { MUSIC_BASE_URL } from '../config';
+import { QuantumRandom } from '../../src/random/QuantumRandom';
 
 /**
  * Calculate the duration in seconds for a track at a given tempo.
@@ -23,17 +24,6 @@ function calculateTrackDuration(tempo: Tempo, type: TrackType): number {
   const secondsPerBeat = 60 / tempo;
   const beats = BEAT_COUNTS[type];
   return beats * secondsPerBeat;
-}
-
-/**
- * Seeded random number generator for reproducible shuffling.
- */
-function seededRandom(seed: number): () => number {
-  let state = seed;
-  return () => {
-    state = (state * 1664525 + 1013904223) % 4294967296;
-    return state / 4294967296;
-  };
 }
 
 /**
@@ -126,40 +116,33 @@ export class HamiltonianPlayer {
   private hiddenTrackSwitchInterval: number | null = null; // Interval for switching hidden tracks
   private hiddenTrackSwitchTimeout: number | null = null; // Timeout that sets up the interval
   private playedSongIds: Set<number> = new Set(); // Track which songs have been played
-  private nextPairScheduledTime: number = 0; // When next pair is scheduled to start
   private scheduledPairsCount: number = 0; // Track how many pairs are scheduled ahead
   private readonly MAX_SCHEDULED_PAIRS = 1; // Limit scheduling to prevent memory issues on iOS
+  private qrng: QuantumRandom; // Quantum random number generator for true randomness
 
   constructor(songs: Song[], initialKey?: Key, initialTempo?: Tempo) {
     this.songs = songs;
+    this.qrng = new QuantumRandom();
+    this.hamiltonianPath = [...songs]; // Will be shuffled in init()
 
-    // Create single Hamiltonian path through ALL songs
-    this.hamiltonianPath = this.shuffleSongs([...songs]);
-
-    // Initialize path indexes for each tempo (to track where we are in the path)
+    // Initialize path indexes for each tempo
     for (const tempo of ALL_TEMPOS) {
       this.pathIndexesByTempo.set(tempo, 0);
     }
 
-    // Determine starting key and tempo
-    let startKey: Key;
-    let startTempo: Tempo;
-
-    if (initialKey && initialTempo) {
-      startKey = initialKey;
-      startTempo = initialTempo;
-    } else {
-      // Random starting position
-      startKey = ALL_KEYS[Math.floor(Math.random() * ALL_KEYS.length)] as Key;
-      startTempo = ALL_TEMPOS[Math.floor(Math.random() * ALL_TEMPOS.length)];
-    }
+    // Store initial key/tempo for use in init
+    const startKey = initialKey ?? 1 as Key;
+    const startTempo = initialTempo ?? 84;
 
     // Generate progression starting from the chosen key/tempo
-    // This ensures we complete all 10 keys at this tempo before switching
     this.progression = this.generateProgressionFromPoint(startKey, startTempo);
-    this.progressIndex = 0; // Always start at beginning of generated progression
+    this.progressIndex = 0;
 
     const currentEntry = this.progression[this.progressIndex];
+    if (!currentEntry) {
+      throw new Error('Failed to generate progression - no entries available');
+    }
+
     this.state = {
       key: currentEntry.key,
       tempo: currentEntry.tempo,
@@ -176,41 +159,20 @@ export class HamiltonianPlayer {
   }
 
   /**
-   * Generate the structured progression:
-   * 1 pair per key, 10 keys per tempo.
-   * Key 1→2→3...→10 at current tempo, then switch to next tempo.
-   * Cycles: 84→94→102→84→94→102→...
+   * Async initialization to shuffle songs with quantum randomness.
+   * Call this after construction and await it before using the player.
    */
-  private generateProgression(): ProgressionEntry[] {
-    const progression: ProgressionEntry[] = [];
-    const KEYS_TO_USE = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as Key[];
-
-    // Generate enough entries for continuous playback
-    // Repeat the 30-entry cycle (10 keys × 3 tempos)
-    for (let cycle = 0; cycle < 10; cycle++) {
-      for (const tempo of ALL_TEMPOS) {
-        for (const key of KEYS_TO_USE) {
-          progression.push({ key, tempo });
-        }
-      }
-    }
-
-    return progression;
+  async init(): Promise<void> {
+    // Shuffle the Hamiltonian path with true randomness
+    this.hamiltonianPath = await this.shuffleSongs([...this.songs]);
+    console.log('🎲 Hamiltonian path shuffled with quantum randomness');
   }
 
   /**
-   * Shuffle songs using seeded random.
+   * Shuffle songs using quantum randomness for true unpredictability.
    */
-  private shuffleSongs(songs: Song[]): Song[] {
-    const shuffled = [...songs];
-    const rng = seededRandom(Date.now());
-
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-
-    return shuffled;
+  private async shuffleSongs(songs: Song[]): Promise<Song[]> {
+    return await this.qrng.shuffle(songs);
   }
 
   /**
@@ -222,8 +184,8 @@ export class HamiltonianPlayer {
   private getNextSong(tempo: Tempo, avoidArtists: string[] = []): Song {
     // Safety check: ensure we have songs and a path
     if (!this.hamiltonianPath || this.hamiltonianPath.length === 0) {
-      console.log('🔄 Hamiltonian path empty, reshuffling');
-      this.hamiltonianPath = this.shuffleSongs([...this.songs]);
+      console.log('🔄 Hamiltonian path empty - using unshuffled songs as fallback');
+      this.hamiltonianPath = [...this.songs];
       for (const t of ALL_TEMPOS) {
         this.pathIndexesByTempo.set(t, 0);
       }
@@ -279,8 +241,8 @@ export class HamiltonianPlayer {
           return fallbackSong;
         }
 
-        console.log(`🔄 Reshuffling entire Hamiltonian path (all ${this.songs.length} songs)`);
-        this.hamiltonianPath = this.shuffleSongs([...this.songs]);
+        console.log(`🔄 Reshuffling entire Hamiltonian path (all ${this.songs.length} songs) - using unshuffled as fallback`);
+        this.hamiltonianPath = [...this.songs]; // Use unshuffled songs as emergency fallback
         // Reset all tempo indexes
         for (const t of ALL_TEMPOS) {
           this.pathIndexesByTempo.set(t, 0);
@@ -295,8 +257,8 @@ export class HamiltonianPlayer {
       return fallbackSong;
     }
 
-    console.log('⚠️ getNextSong exceeded max attempts, reshuffling');
-    this.hamiltonianPath = this.shuffleSongs([...this.songs]);
+    console.log('⚠️ getNextSong exceeded max attempts - using unshuffled songs as fallback');
+    this.hamiltonianPath = [...this.songs]; // Use unshuffled songs as emergency fallback
     for (const t of ALL_TEMPOS) {
       this.pathIndexesByTempo.set(t, 0);
     }
@@ -444,7 +406,7 @@ export class HamiltonianPlayer {
    * Get a musically related key using various harmonic relationships.
    * Uses circle of fifths, parallel modes, relative keys, and other theory.
    */
-  private getMusicallyRelatedKey(baseKey: Key): Key {
+  private async getMusicallyRelatedKey(baseKey: Key): Promise<Key> {
     const relationships = [
       7,   // Perfect 5th up (dominant)
       5,   // Perfect 4th up (subdominant)
@@ -459,8 +421,8 @@ export class HamiltonianPlayer {
       -4,  // Major 3rd down
     ];
 
-    // Pick a random relationship
-    const relationship = relationships[Math.floor(Math.random() * relationships.length)];
+    // Pick a random relationship using quantum randomness
+    const relationship = await this.qrng.getChoice(relationships);
 
     // Calculate new key (mod 12 for octave wrap, +1 because keys are 1-indexed)
     let newKey = ((baseKey - 1 + relationship) % 12);
@@ -524,8 +486,8 @@ export class HamiltonianPlayer {
   ): Promise<void> {
     // Add tracks to pair if not already present
     if (!pair.track3 || !pair.track4) {
-      const relatedKey3 = this.getMusicallyRelatedKey(pair.key);
-      const relatedKey4 = this.getMusicallyRelatedKey(pair.key);
+      const relatedKey3 = await this.getMusicallyRelatedKey(pair.key);
+      const relatedKey4 = await this.getMusicallyRelatedKey(pair.key);
 
       const song3 = this.getNextSong(pair.tempo, [
         pair.track1.song.artist,
@@ -559,7 +521,7 @@ export class HamiltonianPlayer {
     pair: TrackPair,
     pairStartTime: number,
     mainStartTime: number,
-    pairEndTime: number,
+    _pairEndTime: number,
     isCurrentPair: boolean = false,
     preloadedBuffers?: {
       intro3Buffer: AudioBuffer;
@@ -580,8 +542,8 @@ export class HamiltonianPlayer {
       // Only create tracks if they don't already exist (they might be pre-created)
       if (!pair.track3 || !pair.track4) {
         // Pick two songs in musically related keys
-        const relatedKey3 = this.getMusicallyRelatedKey(pair.key);
-        const relatedKey4 = this.getMusicallyRelatedKey(pair.key);
+        const relatedKey3 = await this.getMusicallyRelatedKey(pair.key);
+        const relatedKey4 = await this.getMusicallyRelatedKey(pair.key);
 
         // Get songs for hidden tracks (avoid songs already playing)
         const song3 = this.getNextSong(pair.tempo, [
@@ -603,8 +565,12 @@ export class HamiltonianPlayer {
         pair.track4 = track4;
       }
 
-      const track3 = pair.track3!;
-      const track4 = pair.track4!;
+      const track3 = pair.track3;
+      const track4 = pair.track4;
+
+      if (!track3 || !track4) {
+        throw new Error('Failed to create hidden tracks');
+      }
 
       console.log(
         `🎵 Mannie Fresh: Track 3: ${track3.song.title} (${track3.song.artist}) in key ${track3.key}`
@@ -639,7 +605,7 @@ export class HamiltonianPlayer {
       intro3Source.connect(this.track3Gain!);
       intro3Source.start(pairStartTime);
       console.log(`▶️ Started Track 3 intro at ${pairStartTime}`);
-      intro3Source.onended = () => {
+      intro3Source.onended = (): void => {
         intro3Source.disconnect();
         const idx = this.currentSources.indexOf(intro3Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -651,7 +617,7 @@ export class HamiltonianPlayer {
       main3Source.connect(this.track3Gain!);
       main3Source.start(mainStartTime);
       console.log(`▶️ Scheduled Track 3 main at ${mainStartTime}`);
-      main3Source.onended = () => {
+      main3Source.onended = (): void => {
         main3Source.disconnect();
         const idx = this.currentSources.indexOf(main3Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -664,7 +630,7 @@ export class HamiltonianPlayer {
       intro4Source.connect(this.track4Gain!);
       intro4Source.start(pairStartTime);
       console.log(`▶️ Started Track 4 intro at ${pairStartTime}`);
-      intro4Source.onended = () => {
+      intro4Source.onended = (): void => {
         intro4Source.disconnect();
         const idx = this.currentSources.indexOf(intro4Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -676,7 +642,7 @@ export class HamiltonianPlayer {
       main4Source.connect(this.track4Gain!);
       main4Source.start(mainStartTime);
       console.log(`▶️ Scheduled Track 4 main at ${mainStartTime}`);
-      main4Source.onended = () => {
+      main4Source.onended = (): void => {
         main4Source.disconnect();
         const idx = this.currentSources.indexOf(main4Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -813,6 +779,10 @@ export class HamiltonianPlayer {
     const entry1 = this.progression[this.progressIndex];
     const entry2 = this.progression[(this.progressIndex + 1) % this.progression.length];
 
+    if (!entry1 || !entry2) {
+      throw new Error('Failed to get progression entries');
+    }
+
     // Pair 1: avoid same artist
     const song1a = this.getNextSong(entry1.tempo);
     const song1b = this.getNextSong(entry1.tempo, [song1a.artist]);
@@ -825,16 +795,16 @@ export class HamiltonianPlayer {
     const nextPair = this.createTrackPair(song2a, song2b, entry2.key, entry2.tempo);
 
     // Add hidden tracks to currentPair (first pair)
-    const currentRelatedKey3 = this.getMusicallyRelatedKey(entry1.key);
-    const currentRelatedKey4 = this.getMusicallyRelatedKey(entry1.key);
+    const currentRelatedKey3 = await this.getMusicallyRelatedKey(entry1.key);
+    const currentRelatedKey4 = await this.getMusicallyRelatedKey(entry1.key);
     const currentSong3 = this.getNextSong(entry1.tempo, [song1a.artist, song1b.artist]);
     const currentSong4 = this.getNextSong(entry1.tempo, [song1a.artist, song1b.artist, currentSong3.artist]);
     currentPair.track3 = this.createTrack(currentSong3, currentRelatedKey3, entry1.tempo);
     currentPair.track4 = this.createTrack(currentSong4, currentRelatedKey4, entry1.tempo);
 
     // Add hidden tracks to nextPair
-    const relatedKey3 = this.getMusicallyRelatedKey(entry2.key);
-    const relatedKey4 = this.getMusicallyRelatedKey(entry2.key);
+    const relatedKey3 = await this.getMusicallyRelatedKey(entry2.key);
+    const relatedKey4 = await this.getMusicallyRelatedKey(entry2.key);
     const song3 = this.getNextSong(entry2.tempo, [song2a.artist, song2b.artist]);
     const song4 = this.getNextSong(entry2.tempo, [song2a.artist, song2b.artist, song3.artist]);
     nextPair.track3 = this.createTrack(song3, relatedKey3, entry2.tempo);
@@ -910,7 +880,7 @@ export class HamiltonianPlayer {
       intro1Source.buffer = intro1Buffer;
       intro1Source.connect(this.track1Gain!);
       intro1Source.start(this.pairStartTime);
-      intro1Source.onended = () => {
+      intro1Source.onended = (): void => {
         intro1Source.disconnect();
         const idx = this.currentSources.indexOf(intro1Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -921,7 +891,7 @@ export class HamiltonianPlayer {
       main1Source.buffer = main1Buffer;
       main1Source.connect(this.track1Gain!);
       main1Source.start(mainStartTime);
-      main1Source.onended = () => {
+      main1Source.onended = (): void => {
         main1Source.disconnect();
         const idx = this.currentSources.indexOf(main1Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -933,7 +903,7 @@ export class HamiltonianPlayer {
       intro2Source.buffer = intro2Buffer;
       intro2Source.connect(this.track2Gain!);
       intro2Source.start(this.pairStartTime);
-      intro2Source.onended = () => {
+      intro2Source.onended = (): void => {
         intro2Source.disconnect();
         const idx = this.currentSources.indexOf(intro2Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -944,7 +914,7 @@ export class HamiltonianPlayer {
       main2Source.buffer = main2Buffer;
       main2Source.connect(this.track2Gain!);
       main2Source.start(mainStartTime);
-      main2Source.onended = () => {
+      main2Source.onended = (): void => {
         main2Source.disconnect();
         const idx = this.currentSources.indexOf(main2Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -965,7 +935,6 @@ export class HamiltonianPlayer {
 
       // IMMEDIATELY schedule the next pair to start at pairEndTime
       // This is the key to flawless timing - don't wait, schedule NOW
-      this.nextPairScheduledTime = pairEndTime;
       void this.scheduleNextPair(pairEndTime);
 
       // setTimeout ONLY for UI events (never for audio timing)
@@ -1039,7 +1008,7 @@ export class HamiltonianPlayer {
       intro1Source.start(startTime);
 
       // Clean up source after it finishes to prevent memory leaks
-      intro1Source.onended = () => {
+      intro1Source.onended = (): void => {
         intro1Source.disconnect();
         const idx = this.currentSources.indexOf(intro1Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -1051,7 +1020,7 @@ export class HamiltonianPlayer {
       main1Source.connect(this.track1Gain!);
       main1Source.start(mainStartTime);
 
-      main1Source.onended = () => {
+      main1Source.onended = (): void => {
         main1Source.disconnect();
         const idx = this.currentSources.indexOf(main1Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -1063,7 +1032,7 @@ export class HamiltonianPlayer {
       intro2Source.connect(this.track2Gain!);
       intro2Source.start(startTime);
 
-      intro2Source.onended = () => {
+      intro2Source.onended = (): void => {
         intro2Source.disconnect();
         const idx = this.currentSources.indexOf(intro2Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -1075,7 +1044,7 @@ export class HamiltonianPlayer {
       main2Source.connect(this.track2Gain!);
       main2Source.start(mainStartTime);
 
-      main2Source.onended = () => {
+      main2Source.onended = (): void => {
         main2Source.disconnect();
         const idx = this.currentSources.indexOf(main2Source);
         if (idx > -1) this.currentSources.splice(idx, 1);
@@ -1095,6 +1064,9 @@ export class HamiltonianPlayer {
 
       // Prepare the NEW next pair - avoid artists from the pair we just scheduled
       const nextEntry = this.progression[(this.progressIndex + 1) % this.progression.length];
+      if (!nextEntry) {
+        throw new Error('Failed to get next progression entry');
+      }
       const avoidArtists = [
         pairToSchedule.track1.song.artist,
         pairToSchedule.track2.song.artist
@@ -1104,8 +1076,8 @@ export class HamiltonianPlayer {
       const newNextPair = this.createTrackPair(song1, song2, nextEntry.key, nextEntry.tempo);
 
       // Add hidden tracks to the new next pair
-      const relatedKey3 = this.getMusicallyRelatedKey(nextEntry.key);
-      const relatedKey4 = this.getMusicallyRelatedKey(nextEntry.key);
+      const relatedKey3 = await this.getMusicallyRelatedKey(nextEntry.key);
+      const relatedKey4 = await this.getMusicallyRelatedKey(nextEntry.key);
       const song3 = this.getNextSong(nextEntry.tempo, [song1.artist, song2.artist]);
       const song4 = this.getNextSong(nextEntry.tempo, [song1.artist, song2.artist, song3.artist]);
       newNextPair.track3 = this.createTrack(song3, relatedKey3, nextEntry.tempo);
@@ -1125,11 +1097,12 @@ export class HamiltonianPlayer {
           this.scheduledPairsCount--;
         }
 
+        const currentEntry = this.progression[this.progressIndex]!;
         this.updateState({
           currentPair: pairToSchedule,
           nextPair: newNextPair,
-          key: this.progression[this.progressIndex].key,
-          tempo: this.progression[this.progressIndex].tempo,
+          key: currentEntry.key,
+          tempo: currentEntry.tempo,
           progressIndex: this.progressIndex,
         });
         this.emit('pairStart', pairToSchedule);
@@ -1173,8 +1146,10 @@ export class HamiltonianPlayer {
     // Limit cache size to prevent memory issues on iOS
     // Keep only the most recent 12 buffers (3 pairs × 4 files)
     if (this.preloadedBuffers.size > 12) {
-      const firstKey = this.preloadedBuffers.keys().next().value;
-      this.preloadedBuffers.delete(firstKey);
+      const firstKey = this.preloadedBuffers.keys().next().value as string;
+      if (firstKey) {
+        this.preloadedBuffers.delete(firstKey);
+      }
     }
 
     return buffer;
@@ -1223,6 +1198,9 @@ export class HamiltonianPlayer {
     // Current next becomes current (already preloaded!)
     const newCurrent = this.state.nextPair;
     if (!newCurrent) return;
+    if (!nextEntry) {
+      throw new Error('Failed to get next progression entry');
+    }
 
     // Get new next pair (2 songs at same tempo) - avoid artists from newCurrent
     const avoidArtists = [newCurrent.track1.song.artist, newCurrent.track2.song.artist];
@@ -1236,8 +1214,8 @@ export class HamiltonianPlayer {
     this.updateState({
       currentPair: newCurrent,
       nextPair: newNext,
-      key: this.progression[this.progressIndex].key,
-      tempo: this.progression[this.progressIndex].tempo,
+      key: this.progression[this.progressIndex]!.key,
+      tempo: this.progression[this.progressIndex]!.tempo,
       progressIndex: this.progressIndex,
     });
 
@@ -1297,7 +1275,9 @@ export class HamiltonianPlayer {
     this.currentSources.forEach((s) => {
       try {
         s.stop();
-      } catch {}
+      } catch {
+        // Ignore errors (source may already be stopped)
+      }
     });
     this.currentSources = [];
 
@@ -1321,7 +1301,9 @@ export class HamiltonianPlayer {
     this.currentSources.forEach((s) => {
       try {
         s.stop();
-      } catch {}
+      } catch {
+        // Ignore errors (source may already be stopped)
+      }
     });
     this.currentSources = [];
 
@@ -1349,12 +1331,12 @@ export class HamiltonianPlayer {
 
     // If we've played most songs, reset and use all songs
     if (unplayedSongs.length < 20) {
-      console.log('🔄 Most songs played - resetting Hamiltonian path with all songs');
+      console.log('🔄 Most songs played - resetting Hamiltonian path with all songs (unshuffled)');
       this.playedSongIds.clear();
-      this.hamiltonianPath = this.shuffleSongs([...this.songs]);
+      this.hamiltonianPath = [...this.songs]; // Use unshuffled songs - main randomness comes from init()
     } else {
-      console.log(`🔄 Recalculating Hamiltonian path with ${unplayedSongs.length} unplayed songs`);
-      this.hamiltonianPath = this.shuffleSongs(unplayedSongs);
+      console.log(`🔄 Recalculating Hamiltonian path with ${unplayedSongs.length} unplayed songs (unshuffled)`);
+      this.hamiltonianPath = unplayedSongs; // Use unshuffled unplayed songs
     }
 
     // Reset path indexes
@@ -1386,11 +1368,11 @@ export class HamiltonianPlayer {
     for (let cycle = 0; cycle < 10; cycle++) {
       // Cycle through tempos starting from startTempo
       for (let tempoOffset = 0; tempoOffset < ALL_TEMPOS.length; tempoOffset++) {
-        const tempo = ALL_TEMPOS[(startTempoIndex + tempoOffset) % ALL_TEMPOS.length];
+        const tempo = ALL_TEMPOS[(startTempoIndex + tempoOffset) % ALL_TEMPOS.length]!;
 
         // For each tempo, walk through all 10 keys starting from startKey
         for (let keyOffset = 0; keyOffset < KEYS_TO_USE.length; keyOffset++) {
-          const key = KEYS_TO_USE[(startKeyIndex + keyOffset) % KEYS_TO_USE.length];
+          const key = KEYS_TO_USE[(startKeyIndex + keyOffset) % KEYS_TO_USE.length]!;
 
           progression.push({ key, tempo });
         }
@@ -1415,6 +1397,9 @@ export class HamiltonianPlayer {
 
     // Prepare new next pair - avoid artists from current pair
     const nextEntry = this.progression[(this.progressIndex + 1) % this.progression.length];
+    if (!nextEntry) {
+      throw new Error('Failed to get next progression entry');
+    }
     const avoidArtists = this.state.currentPair
       ? [this.state.currentPair.track1.song.artist, this.state.currentPair.track2.song.artist]
       : [];
@@ -1447,6 +1432,9 @@ export class HamiltonianPlayer {
 
     // Prepare new next pair - avoid artists from current pair
     const nextEntry = this.progression[(this.progressIndex + 1) % this.progression.length];
+    if (!nextEntry) {
+      throw new Error('Failed to get next progression entry');
+    }
     const avoidArtists = this.state.currentPair
       ? [this.state.currentPair.track1.song.artist, this.state.currentPair.track2.song.artist]
       : [];
@@ -1486,6 +1474,7 @@ export class HamiltonianPlayer {
       let searchIndex = startIndex;
       let wrapped = false;
 
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         if (searchIndex >= this.hamiltonianPath.length) {
           searchIndex = 0;
@@ -1498,7 +1487,7 @@ export class HamiltonianPlayer {
         }
 
         const song = this.hamiltonianPath[searchIndex];
-        if (song.bpm === tempo) {
+        if (song && song.bpm === tempo) {
           tempPathIndexes.set(tempo, searchIndex + 1);
           return song;
         }
@@ -1509,6 +1498,8 @@ export class HamiltonianPlayer {
 
     for (let i = 0; i < Math.min(count, this.progression.length); i++) {
       const entry = this.progression[i];
+      if (!entry) continue;
+
       const song1 = getNextSongForPlaylist(entry.tempo);
       const song2 = getNextSongForPlaylist(entry.tempo);
 

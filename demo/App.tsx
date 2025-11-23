@@ -18,6 +18,11 @@ function App(): React.ReactElement {
   const [currentTrack, setCurrentTrack] = useState<'intro' | 'main'>('intro');
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
+  // Initialize player with quantum randomness
+  useEffect(() => {
+    void player.init();
+  }, [player]);
+
   // Wake Lock functionality
   useEffect(() => {
     const requestWakeLock = async (): Promise<void> => {
