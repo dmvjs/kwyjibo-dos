@@ -111,15 +111,19 @@ export class HamiltonianPlayer {
   private track4Gain: GainNode | null = null; // Gain node for hidden track 4 (D) - Mannie Fresh mode
   private masterCompressor: DynamicsCompressorNode | null = null; // Master compressor for arena sound
   private crossfaderPosition: number = 0.5; // 0 = all A, 0.5 = center, 1 = all B
-  private mannieFreshMode: boolean = false; // Enable hidden tracks that alternate every 4 bars
+  private mannieFreshMode: boolean = true; // Enable hidden tracks that alternate every 4 bars
   private mannieFreshVolume: number = 0.66; // Volume for MF tracks (0-1), default 66%
   private currentHiddenTrack: 3 | 4 = 3; // Which hidden track is currently playing (3 or 4)
   private hiddenTrackSwitchInterval: number | null = null; // Interval for switching hidden tracks
   private hiddenTrackSwitchTimeout: number | null = null; // Timeout that sets up the interval
   private playedSongIds: Set<number> = new Set(); // Track which songs have been played
+  private playedPairs: Set<string> = new Set(); // Track which pairs have been played (never repeat)
+  private recentArtists: string[] = []; // Track recent artists for diversity
+  private recentSongs: Song[] = []; // Track recently played songs
   private scheduledPairsCount: number = 0; // Track how many pairs are scheduled ahead
   private readonly MAX_SCHEDULED_PAIRS = 1; // Limit scheduling to prevent memory issues on iOS
   private qrng: QuantumRandom; // Quantum random number generator for true randomness
+  private tempoPairCounts: Map<Tempo, number> = new Map(); // Weighted pair counts per tempo for equal distribution
 
   // 808 Mode - Frequency splitting for deconstructed beats
   private eightZeroEightMode: boolean = false;
@@ -140,6 +144,26 @@ export class HamiltonianPlayer {
     // Initialize path indexes for each tempo
     for (const tempo of ALL_TEMPOS) {
       this.pathIndexesByTempo.set(tempo, 0);
+    }
+
+    // Calculate weighted pair counts for each tempo to ensure equal song distribution
+    // More songs at a tempo = more pairs played at that tempo
+    const songCountsByTempo = new Map<Tempo, number>();
+    for (const tempo of ALL_TEMPOS) {
+      const count = songs.filter(s => s.bpm === tempo).length;
+      songCountsByTempo.set(tempo, count);
+    }
+
+    // Find minimum song count to use as base
+    const minSongCount = Math.min(...Array.from(songCountsByTempo.values()));
+    const basePairCount = 10; // Base number of pairs for tempo with fewest songs
+
+    // Calculate proportional pair counts
+    for (const tempo of ALL_TEMPOS) {
+      const songCount = songCountsByTempo.get(tempo) || 1;
+      const pairCount = Math.round(basePairCount * (songCount / minSongCount));
+      this.tempoPairCounts.set(tempo, pairCount);
+      console.log(`🎵 Tempo ${tempo} BPM: ${songCount} songs → ${pairCount} pairs per cycle`);
     }
 
     // Store initial key/tempo for use in init
@@ -165,8 +189,8 @@ export class HamiltonianPlayer {
       progressIndex: this.progressIndex,
       canSkipBack: false,
       canSkipForward: true,
-      mannieFreshMode: false,
-      activeHiddenTrack: null,
+      mannieFreshMode: true,
+      activeHiddenTrack: 3,
       eightZeroEightMode: false,
     };
   }
@@ -215,10 +239,236 @@ export class HamiltonianPlayer {
   }
 
   /**
-   * Get the next song from the Hamiltonian path at the specified tempo.
+   * Check if two artists match (including substring matching).
+   * E.g., "Jay-Z" matches "Jay-Z feat. Beyoncé"
+   */
+  private artistsMatch(artist1: string, artist2: string): boolean {
+    const a1 = artist1.toLowerCase();
+    const a2 = artist2.toLowerCase();
+    return a1.includes(a2) || a2.includes(a1);
+  }
+
+  /**
+   * Create a unique pair ID for tracking.
+   */
+  private getPairId(song1: Song, song2: Song): string {
+    const [id1, id2] = [song1.id, song2.id].sort((a, b) => a - b);
+    return `${id1}-${id2}`;
+  }
+
+  /**
+   * Check if a pair has been played before.
+   */
+  private isPairPlayed(song1: Song, song2: Song): boolean {
+    return this.playedPairs.has(this.getPairId(song1, song2));
+  }
+
+  /**
+   * Mark a pair as played.
+   */
+  private markPairPlayed(song1: Song, song2: Song): void {
+    this.playedPairs.add(this.getPairId(song1, song2));
+  }
+
+  /**
+   * Score a candidate song based on multiple factors.
+   * Higher score = better choice.
+   */
+  private scoreSong(song: Song, tempo: Tempo, key: Key, partnerSong: Song | null, avoidArtists: string[]): number {
+    let score = 100;
+
+    // Tempo compatibility (preference for matching, but allow stretches for variety)
+    if (song.bpm === tempo) {
+      score += 60; // Strong bonus for exact tempo match
+    } else {
+      // Allow different tempos but with penalties based on distance
+      const tempoDiff = Math.abs(song.bpm - tempo);
+      if (tempoDiff <= 6) {
+        score += 20; // Close tempo (within ~6 BPM)
+      } else if (tempoDiff <= 12) {
+        score -= 10; // Moderate stretch
+      } else if (tempoDiff <= 18) {
+        score -= 30; // Bigger stretch
+      } else {
+        score -= 50; // Very distant tempo (still allowed for variety)
+      }
+    }
+
+    // Key compatibility (harmonic scoring - perfect match gets bonus)
+    if (song.key === key) {
+      score += 50; // Perfect key match
+    } else {
+      // Compatible keys (circle of fifths, relative minor/major, etc.)
+      const keyDiff = Math.abs(song.key - key);
+      const circularDiff = Math.min(keyDiff, 12 - keyDiff);
+
+      if (circularDiff === 0) score += 50; // Perfect
+      else if (circularDiff === 5 || circularDiff === 7) score += 30; // Perfect fifth/fourth
+      else if (circularDiff === 3 || circularDiff === 4) score += 20; // Relative minor/major
+      else if (circularDiff === 2) score += 10; // Whole step
+      else score -= circularDiff * 5; // Penalize distant keys
+    }
+
+    // Artist diversity - penalize if artist matches any in avoid list
+    for (const avoidArtist of avoidArtists) {
+      if (this.artistsMatch(song.artist, avoidArtist)) {
+        score -= 80; // Heavy penalty for artist repetition
+      }
+    }
+
+    // Partner song checks (if selecting song2)
+    if (partnerSong) {
+      // Never pair with same artist
+      if (this.artistsMatch(song.artist, partnerSong.artist)) {
+        return -1000; // Invalid
+      }
+
+      // Never repeat a pair
+      if (this.isPairPlayed(song, partnerSong)) {
+        return -1000; // Invalid
+      }
+
+      // Prefer different artists (bonus for diversity)
+      score += 30;
+    }
+
+    // Recency penalty - prefer songs not played recently
+    const recentIndex = this.recentSongs.findIndex(s => s.id === song.id);
+    if (recentIndex !== -1) {
+      // More recent = bigger penalty
+      const recencyPenalty = Math.max(0, 50 - recentIndex * 2);
+      score -= recencyPenalty;
+    }
+
+    // MASSIVE bonus for songs not played yet (ensures Hamiltonian path behavior)
+    // This bonus is large enough to overcome tempo/key mismatches and random variance
+    // Only played songs should be selected when no unplayed songs meet the constraints
+    if (!this.playedSongIds.has(song.id)) {
+      score += 200;
+    }
+
+    // Add variety factors to break ties and create more interesting selections:
+    // Brian Eno style: chaos within constraints
+
+    // INCREASED random variance for maximum chaos and unpredictability (0-80 points)
+    // Creates significant differentiation even among "identical" candidates
+    // High variance ensures songs aren't predictably chosen based on ID or other biases
+    const randomVariance = Math.random() * 80;
+    score += randomVariance;
+
+    return score;
+  }
+
+  /**
+   * Get the next song using sophisticated selection algorithm.
+   * Takes time to find the perfect match considering:
+   * - Key/tempo constraints
+   * - No repeated pairs
+   * - Artist diversity
+   * - Recency
+   * Uses quantum randomness for final selection from top candidates.
+   */
+  private async getNextSongSmart(tempo: Tempo, key: Key, partnerSong: Song | null = null, avoidArtists: string[] = [], avoidSongIds: number[] = []): Promise<Song> {
+    console.log(`🎯 Selecting next song: tempo=${tempo}, key=${key}, partner=${partnerSong?.artist || 'none'}`);
+
+    // HAMILTONIAN PATH: Prioritize unplayed songs to ensure we cycle through all songs
+    const unplayedSongs = this.songs.filter(song => !this.playedSongIds.has(song.id) && !avoidSongIds.includes(song.id));
+    const shouldResetPlayedSongs = unplayedSongs.length < 20;
+
+    // STRICT TEMPO MATCHING: Only consider songs at the exact target tempo
+    // This prevents tempo mismatches (e.g., 84 BPM song with 94 BPM songs)
+    const unplayedAtTempo = unplayedSongs.filter(song => song.bpm === tempo);
+    const allSongsAtTempo = this.songs.filter(song => song.bpm === tempo && !avoidSongIds.includes(song.id));
+
+    // Try unplayed songs at correct tempo first (proper Hamiltonian behavior)
+    let candidates = unplayedAtTempo.length > 0 ? unplayedAtTempo : allSongsAtTempo;
+    console.log(`   Candidate pool: ${candidates.length} songs at ${tempo} BPM (${unplayedAtTempo.length} unplayed, ${this.playedSongIds.size} played total)`);
+
+    if (shouldResetPlayedSongs) {
+      console.log('   ⚠️ Low unplayed song count - will reset after this selection');
+    }
+
+    // Score all candidates
+    const scored = candidates
+      .map(song => ({
+        song,
+        score: this.scoreSong(song, tempo, key, partnerSong, avoidArtists)
+      }))
+      .filter(item => item.score > -1000) // Remove invalid candidates
+      .sort((a, b) => b.score - a.score); // Highest score first
+
+    if (scored.length === 0) {
+      // No valid candidates - try fallback strategies
+      console.log('⚠️ No valid candidates, trying fallback strategies...');
+
+      // If we were only considering unplayed songs at tempo, expand to ALL songs at tempo
+      if (candidates === unplayedAtTempo && unplayedAtTempo.length > 0) {
+        console.log('   → Expanding to all songs at tempo (including played)');
+        candidates = allSongsAtTempo;
+        const allScored = candidates
+          .map(song => ({
+            song,
+            score: this.scoreSong(song, tempo, key, partnerSong, avoidArtists)
+          }))
+          .filter(item => item.score > -1000)
+          .sort((a, b) => b.score - a.score);
+
+        if (allScored.length > 0) {
+          const topCandidates = allScored.slice(0, Math.min(20, allScored.length));
+          const selected = await this.qrng.getChoice(topCandidates);
+          console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score}, from all songs at tempo)`);
+          return selected.song;
+        }
+      }
+
+      // Try without artist avoidance
+      const relaxed = candidates
+        .map(song => ({
+          song,
+          score: this.scoreSong(song, tempo, key, partnerSong, []) // Remove artist avoidance
+        }))
+        .filter(item => item.score > -1000)
+        .sort((a, b) => b.score - a.score);
+
+      if (relaxed.length === 0) {
+        // Last resort: just pick any song
+        console.log('⚠️ Last resort: picking any song from pool');
+        return candidates[0]!;
+      }
+
+      // Pick from top 20 relaxed candidates for more variety
+      const topRelaxed = relaxed.slice(0, Math.min(20, relaxed.length));
+      const selected = await this.qrng.getChoice(topRelaxed);
+      console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score}, relaxed)`);
+      return selected.song;
+    }
+
+    // Select from top 20 candidates using quantum randomness for maximum variety
+    const topCandidates = scored.slice(0, Math.min(20, scored.length));
+    const selected = await this.qrng.getChoice(topCandidates);
+
+    console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score})`);
+    console.log(`   Top 20 scores: ${topCandidates.map(c => c.score).join(', ')}`);
+
+    // Auto-reset played songs if we're running low on unplayed songs
+    // This ensures continuous Hamiltonian cycling through all songs
+    if (shouldResetPlayedSongs && this.playedSongIds.size > 0) {
+      console.log(`🔄 Resetting played songs (${this.playedSongIds.size} played, ${unplayedSongs.length} remaining)`);
+      this.playedSongIds.clear();
+      // Also reset played pairs to allow fresh combinations
+      this.playedPairs.clear();
+    }
+
+    return selected.song;
+  }
+
+  /**
+   * OLD METHOD: Get the next song from the Hamiltonian path at the specified tempo.
    * Searches forward in the path for a song at the required tempo.
    * Reshuffles the entire path when we've exhausted all tempos.
    * Optionally avoids songs by specified artists for variety.
+   *
+   * NOTE: This is kept for backward compatibility but not used anymore.
    */
   private getNextSong(tempo: Tempo, avoidArtists: string[] = []): Song {
     // Safety check: ensure we have songs and a path
@@ -317,12 +567,18 @@ export class HamiltonianPlayer {
    */
   private createTrack(song: Song, key: Key, tempo: Tempo): Track {
     const songId = String(song.id).padStart(8, '0');
+
+    // Use .wav on localhost for higher quality, .mp3 in production
+    const isLocalhost = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const extension = isLocalhost ? 'wav' : 'mp3';
+
     return {
       song,
       key,
       tempo,
-      introUrl: `${MUSIC_BASE_URL}${songId}-lead.mp3`,
-      mainUrl: `${MUSIC_BASE_URL}${songId}-body.mp3`,
+      introUrl: `${MUSIC_BASE_URL}${songId}-lead.${extension}`,
+      mainUrl: `${MUSIC_BASE_URL}${songId}-body.${extension}`,
       introDuration: calculateTrackDuration(tempo, 'lead'),
       mainDuration: calculateTrackDuration(tempo, 'body'),
     };
@@ -443,6 +699,83 @@ export class HamiltonianPlayer {
   private calculate4BarDuration(tempo: Tempo): number {
     const secondsPerBeat = 60 / tempo;
     return 16 * secondsPerBeat; // 4 bars × 4 beats/bar = 16 beats
+  }
+
+  /**
+   * Set up MF mode switches for the current pair.
+   * Called when a scheduled pair becomes current.
+   */
+  private setupMFSwitchesForCurrentPair(pair: TrackPair, mainStartTime: number): void {
+    if (!this.audioContext) return;
+
+    console.log(
+      `🎵 Setting up MF switches for current pair: tempo=${pair.tempo}, 4-bar duration=${this.calculate4BarDuration(pair.tempo).toFixed(3)}s`
+    );
+
+    // ALWAYS clear any existing switches
+    if (this.hiddenTrackSwitchTimeout !== null) {
+      clearTimeout(this.hiddenTrackSwitchTimeout);
+      this.hiddenTrackSwitchTimeout = null;
+    }
+    if (this.hiddenTrackSwitchInterval !== null) {
+      clearInterval(this.hiddenTrackSwitchInterval);
+      this.hiddenTrackSwitchInterval = null;
+    }
+
+    // Reset hidden track state and set gains
+    this.currentHiddenTrack = 3;
+    this.updateHiddenTrackGains();
+
+    console.log(
+      `🔊 Track 3 gain: ${this.track3Gain!.gain.value}, Track 4 gain: ${this.track4Gain!.gain.value}`
+    );
+
+    // Start switching at main section start
+    const firstSwitchTime = mainStartTime;
+
+    // Recursive function to schedule switches - ALWAYS recalculates duration from current pair
+    const scheduleNextSwitch = (nextSwitchTime: number): void => {
+      if (!this.audioContext) return;
+
+      const now = this.audioContext.currentTime;
+      const delay = Math.max(0, (nextSwitchTime - now) * 1000);
+
+      this.hiddenTrackSwitchTimeout = window.setTimeout(() => {
+        // Only switch if MF mode is ON and player is actively playing
+        if (!this.mannieFreshMode || !this.state.isPlaying) {
+          return;
+        }
+
+        // Get the CURRENT pair's tempo (not captured tempo)
+        const currentPairTempo = this.state.currentPair?.tempo || pair.tempo;
+        const currentFourBarDuration = this.calculate4BarDuration(currentPairTempo);
+
+        // Alternate between track 3 and 4
+        this.currentHiddenTrack = this.currentHiddenTrack === 3 ? 4 : 3;
+        this.updateHiddenTrackGains();
+
+        // Update state to show active track in UI
+        this.updateState({
+          activeHiddenTrack: this.mannieFreshMode ? this.currentHiddenTrack : null,
+        });
+
+        const switchType = nextSwitchTime === firstSwitchTime ? 'Main started' : 'Beat boundary';
+        const actualTime = this.audioContext!.currentTime;
+        const scheduledTime = nextSwitchTime;
+        const drift = Math.abs(actualTime - scheduledTime) * 1000;
+        console.log(
+          `🔄 Mannie Fresh: ${switchType}, switched to track ${this.currentHiddenTrack} ` +
+          `(tempo: ${currentPairTempo}, scheduled: ${scheduledTime.toFixed(3)}s, actual: ${actualTime.toFixed(3)}s, drift: ${drift.toFixed(1)}ms)`
+        );
+
+        // Schedule next switch using CURRENT pair's tempo, not captured tempo
+        const nextTime = nextSwitchTime + currentFourBarDuration;
+        scheduleNextSwitch(nextTime);
+      }, delay);
+    };
+
+    // Start the switching chain at main section start
+    scheduleNextSwitch(firstSwitchTime);
   }
 
   /**
@@ -1013,63 +1346,7 @@ export class HamiltonianPlayer {
 
       // Only set up the switching interval for the current pair
       if (isCurrentPair) {
-        // Calculate 4-bar (16 beat) duration for alternation
-        const fourBarDuration = this.calculate4BarDuration(pair.tempo);
-
-        // Reset hidden track state and set gains
-        this.currentHiddenTrack = 3;
-        this.updateHiddenTrackGains();
-
-        console.log(
-          `🔊 Track 3 gain: ${this.track3Gain!.gain.value}, Track 4 gain: ${this.track4Gain!.gain.value}`
-        );
-
-        // Clear any existing timeout and interval
-        if (this.hiddenTrackSwitchTimeout !== null) {
-          clearTimeout(this.hiddenTrackSwitchTimeout);
-          this.hiddenTrackSwitchTimeout = null;
-        }
-        if (this.hiddenTrackSwitchInterval !== null) {
-          clearInterval(this.hiddenTrackSwitchInterval);
-          this.hiddenTrackSwitchInterval = null;
-        }
-
-        // Calculate when to start switching (when main section begins)
-        const firstSwitchTime = mainStartTime;
-
-        // Recursive function to schedule switches based on audio time (sample-accurate)
-        const scheduleNextSwitch = (nextSwitchTime: number): void => {
-          if (!this.audioContext) return;
-
-          const now = this.audioContext.currentTime;
-          const delay = Math.max(0, (nextSwitchTime - now) * 1000);
-
-          this.hiddenTrackSwitchTimeout = window.setTimeout(() => {
-            // Only switch if MF mode is ON and player is actively playing
-            if (!this.mannieFreshMode || !this.state.isPlaying) {
-              return;
-            }
-
-            // Alternate between track 3 and 4
-            this.currentHiddenTrack = this.currentHiddenTrack === 3 ? 4 : 3;
-            this.updateHiddenTrackGains();
-
-            // Update state to show active track in UI
-            this.updateState({
-              activeHiddenTrack: this.mannieFreshMode ? this.currentHiddenTrack : null,
-            });
-
-            const switchType = nextSwitchTime === firstSwitchTime ? 'Main started' : 'Beat boundary';
-            console.log(`🔄 Mannie Fresh: ${switchType}, switched to track ${this.currentHiddenTrack}`);
-
-            // Schedule next switch 16 beats (4 bars) later - based on AUDIO time
-            const nextTime = nextSwitchTime + fourBarDuration;
-            scheduleNextSwitch(nextTime);
-          }, delay);
-        };
-
-        // Start the switching chain at main section start
-        scheduleNextSwitch(firstSwitchTime);
+        this.setupMFSwitchesForCurrentPair(pair, mainStartTime);
       }
 
     } catch (err) {
@@ -1156,13 +1433,33 @@ export class HamiltonianPlayer {
       throw new Error('Failed to get progression entries');
     }
 
-    // Pair 1: avoid same artist
-    const song1a = this.getNextSong(entry1.tempo);
-    const song1b = this.getNextSong(entry1.tempo, [song1a.artist]);
+    // Pair 1: Use smart selection with key/tempo constraints
+    console.log('🎵 Selecting pair 1...');
+    const song1a = await this.getNextSongSmart(entry1.tempo, entry1.key, null, this.recentArtists.slice(0, 10));
+    const song1b = await this.getNextSongSmart(entry1.tempo, entry1.key, song1a, [...this.recentArtists.slice(0, 10), song1a.artist]);
+
+    // Mark pair as played and track songs
+    this.markPairPlayed(song1a, song1b);
+    this.playedSongIds.add(song1a.id);
+    this.playedSongIds.add(song1b.id);
+    this.recentSongs.unshift(song1a, song1b);
+    if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+    this.recentArtists.unshift(song1a.artist, song1b.artist);
+    if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
 
     // Pair 2: avoid same artist within pair and artists from pair 1
-    const song2a = this.getNextSong(entry2.tempo, [song1a.artist, song1b.artist]);
-    const song2b = this.getNextSong(entry2.tempo, [song2a.artist, song1a.artist, song1b.artist]);
+    console.log('🎵 Selecting pair 2...');
+    const song2a = await this.getNextSongSmart(entry2.tempo, entry2.key, null, [...this.recentArtists.slice(0, 10), song1a.artist, song1b.artist]);
+    const song2b = await this.getNextSongSmart(entry2.tempo, entry2.key, song2a, [...this.recentArtists.slice(0, 10), song2a.artist, song1a.artist, song1b.artist]);
+
+    // Mark pair as played and track songs
+    this.markPairPlayed(song2a, song2b);
+    this.playedSongIds.add(song2a.id);
+    this.playedSongIds.add(song2b.id);
+    this.recentSongs.unshift(song2a, song2b);
+    if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+    this.recentArtists.unshift(song2a.artist, song2b.artist);
+    if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
 
     const currentPair = this.createTrackPair(song1a, song1b, entry1.key, entry1.tempo);
     const nextPair = this.createTrackPair(song2a, song2b, entry2.key, entry2.tempo);
@@ -1170,16 +1467,32 @@ export class HamiltonianPlayer {
     // Add hidden tracks to currentPair (first pair)
     const currentRelatedKey3 = await this.getMusicallyRelatedKey(entry1.key);
     const currentRelatedKey4 = await this.getMusicallyRelatedKey(entry1.key);
-    const currentSong3 = this.getNextSong(entry1.tempo, [song1a.artist, song1b.artist]);
-    const currentSong4 = this.getNextSong(entry1.tempo, [song1a.artist, song1b.artist, currentSong3.artist]);
+    console.log('🎵 Selecting hidden tracks for pair 1...');
+    const currentSong3 = await this.getNextSongSmart(entry1.tempo, currentRelatedKey3, null, [song1a.artist, song1b.artist], [song1a.id, song1b.id]);
+    const currentSong4 = await this.getNextSongSmart(entry1.tempo, currentRelatedKey4, null, [song1a.artist, song1b.artist, currentSong3.artist], [song1a.id, song1b.id, currentSong3.id]);
+    this.playedSongIds.add(currentSong3.id);
+    this.playedSongIds.add(currentSong4.id);
+    // Track MF tracks for recency too (they count as played!)
+    this.recentSongs.unshift(currentSong3, currentSong4);
+    if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+    this.recentArtists.unshift(currentSong3.artist, currentSong4.artist);
+    if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
     currentPair.track3 = this.createTrack(currentSong3, currentRelatedKey3, entry1.tempo);
     currentPair.track4 = this.createTrack(currentSong4, currentRelatedKey4, entry1.tempo);
 
     // Add hidden tracks to nextPair
     const relatedKey3 = await this.getMusicallyRelatedKey(entry2.key);
     const relatedKey4 = await this.getMusicallyRelatedKey(entry2.key);
-    const song3 = this.getNextSong(entry2.tempo, [song2a.artist, song2b.artist]);
-    const song4 = this.getNextSong(entry2.tempo, [song2a.artist, song2b.artist, song3.artist]);
+    console.log('🎵 Selecting hidden tracks for pair 2...');
+    const song3 = await this.getNextSongSmart(entry2.tempo, relatedKey3, null, [song2a.artist, song2b.artist], [song2a.id, song2b.id]);
+    const song4 = await this.getNextSongSmart(entry2.tempo, relatedKey4, null, [song2a.artist, song2b.artist, song3.artist], [song2a.id, song2b.id, song3.id]);
+    this.playedSongIds.add(song3.id);
+    this.playedSongIds.add(song4.id);
+    // Track MF tracks for recency too
+    this.recentSongs.unshift(song3, song4);
+    if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+    this.recentArtists.unshift(song3.artist, song4.artist);
+    if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
     nextPair.track3 = this.createTrack(song3, relatedKey3, entry2.tempo);
     nextPair.track4 = this.createTrack(song4, relatedKey4, entry2.tempo);
 
@@ -1435,24 +1748,44 @@ export class HamiltonianPlayer {
       // Update progression index (move to the pair we just scheduled)
       this.progressIndex = (this.progressIndex + 1) % this.progression.length;
 
-      // Prepare the NEW next pair - avoid artists from the pair we just scheduled
+      // Prepare the NEW next pair using smart selection
       const nextEntry = this.progression[(this.progressIndex + 1) % this.progression.length];
       if (!nextEntry) {
         throw new Error('Failed to get next progression entry');
       }
+
+      console.log('🎵 Selecting next scheduled pair...');
       const avoidArtists = [
+        ...this.recentArtists.slice(0, 10),
         pairToSchedule.track1.song.artist,
         pairToSchedule.track2.song.artist
       ];
-      const song1 = this.getNextSong(nextEntry.tempo, avoidArtists);
-      const song2 = this.getNextSong(nextEntry.tempo, [...avoidArtists, song1.artist]);
+      const song1 = await this.getNextSongSmart(nextEntry.tempo, nextEntry.key, null, avoidArtists);
+      const song2 = await this.getNextSongSmart(nextEntry.tempo, nextEntry.key, song1, [...avoidArtists, song1.artist]);
+
+      // Mark pair as played and track songs
+      this.markPairPlayed(song1, song2);
+      this.playedSongIds.add(song1.id);
+      this.playedSongIds.add(song2.id);
+      this.recentSongs.unshift(song1, song2);
+      if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+      this.recentArtists.unshift(song1.artist, song2.artist);
+      if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
+
       const newNextPair = this.createTrackPair(song1, song2, nextEntry.key, nextEntry.tempo);
 
       // Add hidden tracks to the new next pair
       const relatedKey3 = await this.getMusicallyRelatedKey(nextEntry.key);
       const relatedKey4 = await this.getMusicallyRelatedKey(nextEntry.key);
-      const song3 = this.getNextSong(nextEntry.tempo, [song1.artist, song2.artist]);
-      const song4 = this.getNextSong(nextEntry.tempo, [song1.artist, song2.artist, song3.artist]);
+      const song3 = await this.getNextSongSmart(nextEntry.tempo, relatedKey3, null, [song1.artist, song2.artist], [song1.id, song2.id]);
+      const song4 = await this.getNextSongSmart(nextEntry.tempo, relatedKey4, null, [song1.artist, song2.artist, song3.artist], [song1.id, song2.id, song3.id]);
+      this.playedSongIds.add(song3.id);
+      this.playedSongIds.add(song4.id);
+      // Track MF tracks for recency
+      this.recentSongs.unshift(song3, song4);
+      if (this.recentSongs.length > 50) this.recentSongs = this.recentSongs.slice(0, 50);
+      this.recentArtists.unshift(song3.artist, song4.artist);
+      if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
       newNextPair.track3 = this.createTrack(song3, relatedKey3, nextEntry.tempo);
       newNextPair.track4 = this.createTrack(song4, relatedKey4, nextEntry.tempo);
 
@@ -1480,6 +1813,12 @@ export class HamiltonianPlayer {
         });
         this.emit('pairStart', pairToSchedule);
         this.emit('introStart', pairToSchedule);
+
+        // Set up MF mode switches for this pair NOW (when it becomes current)
+        // Always set up switches - they'll check MF mode state when they fire
+        if (pairToSchedule.track3 && pairToSchedule.track4) {
+          this.setupMFSwitchesForCurrentPair(pairToSchedule, mainStartTime);
+        }
       }, Math.max(0, pairStartDelay));
 
       // Schedule UI events
@@ -1725,8 +2064,9 @@ export class HamiltonianPlayer {
 
   /**
    * Generate progression starting from a specific key and tempo.
-   * Walks through all 10 keys at the starting tempo, then switches to next tempo.
-   * Key order: startKey → startKey+1 → ... → 10 → 1 → ... → startKey-1
+   * Uses WEIGHTED pair counts per tempo for equal song distribution.
+   * More songs at a tempo = more pairs played at that tempo.
+   * Key order: startKey → startKey+1 → ... → 10 → 1 → ... (cycles through)
    * Tempo order: startTempo → next tempo → next tempo → back to startTempo
    */
   private generateProgressionFromPoint(startKey: Key, startTempo: Tempo): ProgressionEntry[] {
@@ -1743,10 +2083,13 @@ export class HamiltonianPlayer {
       for (let tempoOffset = 0; tempoOffset < ALL_TEMPOS.length; tempoOffset++) {
         const tempo = ALL_TEMPOS[(startTempoIndex + tempoOffset) % ALL_TEMPOS.length]!;
 
-        // For each tempo, walk through all 10 keys starting from startKey
-        for (let keyOffset = 0; keyOffset < KEYS_TO_USE.length; keyOffset++) {
-          const key = KEYS_TO_USE[(startKeyIndex + keyOffset) % KEYS_TO_USE.length]!;
+        // Get WEIGHTED pair count for this tempo (based on song availability)
+        const pairCount = this.tempoPairCounts.get(tempo) || 10;
 
+        // Generate the weighted number of pairs for this tempo
+        // Cycles through all 10 keys as many times as needed
+        for (let pairIndex = 0; pairIndex < pairCount; pairIndex++) {
+          const key = KEYS_TO_USE[(startKeyIndex + pairIndex) % KEYS_TO_USE.length]!;
           progression.push({ key, tempo });
         }
       }
@@ -1798,6 +2141,10 @@ export class HamiltonianPlayer {
       this.updateState({ tempo });
       return;
     }
+
+    // Don't touch MF switches when tempo changes - let current pair finish with
+    // its original tempo timing. Next pair will start with correct new tempo.
+    console.log(`🎵 Tempo changed to ${tempo} - will take effect on next pair`);
 
     // Recalculate Hamiltonian path starting from this tempo
     const currentKey = this.state.key;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { HamiltonianPlayer } from './player/HamiltonianPlayer';
+import { HamiltonianPlayer, TrackPair } from './player/HamiltonianPlayer';
 import type { PlayerState } from './player/HamiltonianPlayer';
 import { songs } from '../src';
 import type { Key, Tempo } from '../src';
@@ -16,6 +16,7 @@ function App(): React.ReactElement {
   const [player] = useState(() => new HamiltonianPlayer([...songs]));
   const [playerState, setPlayerState] = useState<PlayerState>(player.getState());
   const [currentTrack, setCurrentTrack] = useState<'intro' | 'main'>('intro');
+  const [playHistory, setPlayHistory] = useState<TrackPair[]>([]);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   // Initialize player with quantum randomness
@@ -73,6 +74,11 @@ function App(): React.ReactElement {
       setCurrentTrack('main');
     });
 
+    const unsubscribePairStart = player.on('pairStart', (pair): void => {
+      // Add the starting pair to history
+      setPlayHistory(prev => [...prev, pair]);
+    });
+
     const unsubscribeError = player.on('error', (error): void => {
       console.error('Player error:', error);
     });
@@ -81,6 +87,7 @@ function App(): React.ReactElement {
       unsubscribeState();
       unsubscribeIntro();
       unsubscribeMain();
+      unsubscribePairStart();
       unsubscribeError();
     };
   }, [player]);
@@ -118,11 +125,11 @@ function App(): React.ReactElement {
       {/* Playback Controls - Top */}
       <div className="controls">
         {!playerState.isPlaying ? (
-          <button className="ctrl-btn play" onClick={handlePlay}>▶</button>
+          <button className="ctrl-btn play" onClick={handlePlay}>▶︎</button>
         ) : (
-          <button className="ctrl-btn" onClick={handlePause}>⏸</button>
+          <button className="ctrl-btn" onClick={handlePause}>⏸︎</button>
         )}
-        <button className="ctrl-btn" onClick={handleStop}>⏹</button>
+        <button className="ctrl-btn" onClick={handleStop}>⏹︎</button>
       </div>
 
       {/* Status Bar */}
@@ -267,6 +274,41 @@ function App(): React.ReactElement {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Play History */}
+      {playHistory.length > 0 && (
+        <div className="playlist-container">
+          <div className="playlist-section">
+            <div className="section-label played-label">HISTORY ({playHistory.length} PAIRS)</div>
+            {playHistory.map((pair, idx) => (
+              <div key={`played-${idx}`} className="playlist-pair played">
+                <div className="pair-meta">
+                  <span className="pair-key">{KEY_NAMES[pair.key - 1]}</span>
+                  <span className="pair-tempo">{pair.tempo}</span>
+                </div>
+                <div className="pair-tracks">
+                  <div className="playlist-track">
+                    1. {pair.track1.song.artist} - {pair.track1.song.title}
+                  </div>
+                  <div className="playlist-track">
+                    2. {pair.track2.song.artist} - {pair.track2.song.title}
+                  </div>
+                  {pair.track3 && (
+                    <div className="playlist-track">
+                      3. {pair.track3.song.artist} - {pair.track3.song.title}
+                    </div>
+                  )}
+                  {pair.track4 && (
+                    <div className="playlist-track">
+                      4. {pair.track4.song.artist} - {pair.track4.song.title}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
