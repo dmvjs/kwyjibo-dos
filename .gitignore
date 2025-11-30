@@ -8,6 +8,11 @@ dist/
 *.map
 !jest.config.js
 !vite.config.ts
+!songdata.js
+!songdata.d.ts
+!test-*.js
+!calculate-*.js
+!measure-*.js
 
 # Test coverage
 coverage/
