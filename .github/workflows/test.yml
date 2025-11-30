@@ -37,6 +37,9 @@ jobs:
     - name: Run subset diversity test
       run: node test-subset-diversity.js
 
+    - name: Test selection quality
+      run: node test-selection-quality.js
+
     - name: Calculate cycle time
       run: node calculate-cycle-time.js
 
