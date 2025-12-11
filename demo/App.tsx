@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { HamiltonianPlayer, TrackPair } from './player/HamiltonianPlayer';
 import type { PlayerState } from './player/HamiltonianPlayer';
 import { songs } from '../src';
 import type { Key, Tempo } from '../src';
 import { ALL_TEMPOS } from '../src';
+import { SettingsModal } from './components/SettingsModal';
 
 const KEY_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -13,11 +14,39 @@ interface WakeLockSentinel {
 }
 
 function App(): React.ReactElement {
-  const [player] = useState(() => new HamiltonianPlayer([...songs]));
+  const [disabledSongs, setDisabledSongs] = useState<Set<number>>(new Set());
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Load disabled songs from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('disabled-songs');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as number[];
+        setDisabledSongs(new Set(parsed));
+      } catch (err) {
+        // Failed to load disabled songs
+      }
+    }
+  }, []);
+
+  // Filter songs based on disabled list
+  const enabledSongs = useMemo(() => {
+    return songs.filter(song => !disabledSongs.has(song.id));
+  }, [disabledSongs]);
+
+  const [player] = useState(() => new HamiltonianPlayer(enabledSongs));
   const [playerState, setPlayerState] = useState<PlayerState>(player.getState());
   const [currentTrack, setCurrentTrack] = useState<'intro' | 'main'>('intro');
   const [playHistory, setPlayHistory] = useState<TrackPair[]>([]);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Update player when enabled songs change
+  useEffect(() => {
+    if (enabledSongs.length > 0) {
+      player.updateSongs(enabledSongs);
+    }
+  }, [enabledSongs, player]);
 
   // Initialize player with quantum randomness
   useEffect(() => {
@@ -31,10 +60,9 @@ function App(): React.ReactElement {
         if ('wakeLock' in navigator) {
           const nav = navigator as Navigator & { wakeLock: { request: (type: string) => Promise<WakeLockSentinel> } };
           wakeLockRef.current = await nav.wakeLock.request('screen');
-          console.log('Wake Lock active');
         }
       } catch (err) {
-        console.log('Wake Lock not supported or denied');
+        // Wake Lock not supported or denied
       }
     };
 
@@ -79,8 +107,8 @@ function App(): React.ReactElement {
       setPlayHistory(prev => [...prev, pair]);
     });
 
-    const unsubscribeError = player.on('error', (error): void => {
-      console.error('Player error:', error);
+    const unsubscribeError = player.on('error', (): void => {
+      // Player error logged by player
     });
 
     return (): void => {
@@ -120,6 +148,45 @@ function App(): React.ReactElement {
     player.toggle808Mode();
   };
 
+  const formatPlaylistText = (): string => {
+    let text = `PLAYLIST - ${new Date().toLocaleString()}\n`;
+    text += `Key: ${KEY_NAMES[playerState.key - 1]} | Tempo: ${playerState.tempo} BPM\n`;
+    text += `Total Sets: ${playHistory.length}\n\n`;
+
+    playHistory.forEach((pair, idx) => {
+      text += `=== SET ${idx + 1} ===\n`;
+      text += `Key: ${KEY_NAMES[pair.key - 1]} | Tempo: ${pair.tempo} BPM\n`;
+      text += `1. ${pair.track1.song.artist} - ${pair.track1.song.title}\n`;
+      text += `2. ${pair.track2.song.artist} - ${pair.track2.song.title}\n`;
+      if (pair.track3) {
+        text += `3. ${pair.track3.song.artist} - ${pair.track3.song.title}\n`;
+      }
+      if (pair.track4) {
+        text += `4. ${pair.track4.song.artist} - ${pair.track4.song.title}\n`;
+      }
+      text += '\n';
+    });
+
+    return text;
+  };
+
+  const handleCopyPlaylist = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(formatPlaylistText());
+      alert('Playlist copied to clipboard!');
+    } catch (err) {
+      alert('Failed to copy playlist');
+    }
+  };
+
+  const handleSaveSettings = (newDisabledSongs: Set<number>): void => {
+    setDisabledSongs(newDisabledSongs);
+  };
+
+  const handleOpenSettings = (): void => {
+    setShowSettings(true);
+  };
+
   return (
     <div className="app">
       {/* Playback Controls - Top */}
@@ -130,6 +197,9 @@ function App(): React.ReactElement {
           <button className="ctrl-btn" onClick={handlePause}>⏸︎</button>
         )}
         <button className="ctrl-btn" onClick={handleStop}>⏹︎</button>
+        <button className="ctrl-btn settings-btn" onClick={handleOpenSettings} title="Settings">
+          💿
+        </button>
       </div>
 
       {/* Status Bar */}
@@ -281,7 +351,12 @@ function App(): React.ReactElement {
       {playHistory.length > 0 && (
         <div className="playlist-container">
           <div className="playlist-section">
-            <div className="section-label played-label">HISTORY ({playHistory.length} PAIRS)</div>
+            <div className="section-label played-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', paddingRight: '12px' }}>
+              <span>HISTORY ({playHistory.length} {playHistory.length === 1 ? 'SET' : 'SETS'})</span>
+              <button className="playlist-btn-small" onClick={handleCopyPlaylist} title="Copy to clipboard">
+                Copy
+              </button>
+            </div>
             {playHistory.map((pair, idx) => (
               <div key={`played-${idx}`} className="playlist-pair played">
                 <div className="pair-meta">
@@ -311,6 +386,14 @@ function App(): React.ReactElement {
           </div>
         </div>
       )}
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettings}
+        songs={[...songs]}
+        onClose={() => setShowSettings(false)}
+        onSave={handleSaveSettings}
+      />
     </div>
   );
 }

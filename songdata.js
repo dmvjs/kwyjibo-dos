@@ -347,13 +347,13 @@ export const songdata = [
     key: 1,
     bpm: 94,
   },
-  {
+/*  {
     id: 57,
     artist: "LL Cool J",
     title: "Doin It",
     key: 4,
     bpm: 94,
-  },
+  },*/
   {
     id: 58,
     artist: "Jim Jones",
@@ -641,13 +641,13 @@ export const songdata = [
     key: 6,
     bpm: 84,
   },
-  {
+/*  {
     id: 100,
     artist: "Jay-Z",
     title: "Hey Papi",
     key: 12,
     bpm: 84,
-  },
+  },*/
   {
     id: 101,
     artist: "Project Pat",
@@ -676,13 +676,13 @@ export const songdata = [
     key: 3,
     bpm: 84,
   },
-  {
+/*  {
     id: 105,
     artist: "E-40",
     title: "Rep Yo City",
     key: 1,
     bpm: 84,
-  },
+  },*/
   {
     id: 106,
     artist: "Lil Jon",
@@ -823,13 +823,13 @@ export const songdata = [
     bpm: 102,
     key: 1,
   },
-  {
+/*  {
     id: 126,
     artist: "Sean Paul",
     title: "Get Busy",
     bpm: 102,
     key: 2,
-  },
+  },*/
   {
     id: 127,
     artist: "Choppa",
@@ -1314,13 +1314,13 @@ export const songdata = [
     bpm: 102,
     key: 6,
   },
-  {
+  /*{
     id: 210,
     artist: "Onyx",
     title: "Slam",
     bpm: 102,
     key: 3,
-  },
+  },*/
    {
     id: 213,
     artist: "R Kelly",
@@ -1370,13 +1370,13 @@ export const songdata = [
     key: 11,
     bpm: 102,
   },
-  {
+  /*{
     id: 236,
     artist: "Ying Yang Twins",
     title: "Twerking in the Mirror",
     bpm: 102,
     key: 2,
-  },
+  },*/
    {
     id: 242,
     artist: "Beyonce",
@@ -1405,13 +1405,13 @@ export const songdata = [
     bpm: 94,
     key: 2,
   },
-  {
+  /*{
     id: 270,
     artist: "Junior MAFIA",
     title: "Get Money",
     bpm: 94,
     key: 5,
-  },
+  },*/
   {
     id: 273,
     artist: "Rihanna feat Young Jeezy",
@@ -1419,7 +1419,7 @@ export const songdata = [
     bpm: 94,
     key: 5,
   },
-  {
+  /*{
     id: 275,
     artist: "Eve",
     title: "Tamborine Remix",
@@ -1432,7 +1432,7 @@ export const songdata = [
     title: "Bow Wow Wow Remix",
     bpm: 102,
     key: 11,
-  },
+  },*/
    {
     id: 278,
     artist: "Bhad Barbie",
@@ -1559,13 +1559,13 @@ export const songdata = [
     key: 2,
     bpm: 84,
   },
-   {
+   /*{
     id: 306,
     artist: "Lord Tariq & Peter Gunz",
     title: "Deva Vu Uptown Baby",
     key: 7,
     bpm: 102,
-  },
+  },*/
   {
     id: 307,
     artist: "NORE",
@@ -1580,13 +1580,13 @@ export const songdata = [
     key: 7,
     bpm: 102,
   },
-  {
+  /*{
     id: 309,
     artist: "The Game",
     title: "Game's Pain",
     key: 6,
     bpm: 102,
-  },
+  },*/
   {
     id: 310,
     artist: "DMX",
@@ -1692,13 +1692,13 @@ export const songdata = [
     key: 4,
     bpm: 102,
   },*/
-  {
+  /*{
     id: 326,
     artist: "DJ Jazzy Jeff",
     title: "Brand New Funk",
     key: 4,
     bpm: 102,
-  },
+  },*/
    {
     id: 329,
     artist: "Fat Joe",
@@ -1706,13 +1706,13 @@ export const songdata = [
     key: 8,
     bpm: 102,
   },
-  {
+ /* {
     id: 330,
     artist: "Wyclef Jean",
     title: "We Trying to Stay Alive",
     key: 4,
     bpm: 102,
-  },
+  },*/
   {
     id: 331,
     artist: "G Dep",
@@ -1741,13 +1741,13 @@ export const songdata = [
     key: 2,
     bpm: 102,
   },
-  {
+  /*{
     id: 335,
     artist: "Notorious BIG",
     title: "Dead Wrong",
     key: 1,
     bpm: 84,
-  },
+  },*/
   {
     id: 336,
     artist: "DJ UNK",
@@ -1818,13 +1818,13 @@ export const songdata = [
     key: 12,
     bpm: 84,
   },
-  {
+  /*{
     id: 349,
     artist: "Nappy Roots",
     title: "Aww-Naww",
     key: 1,
     bpm: 84,
-  },
+  },*/
   {
     id: 350,
     artist: "Webbie",
@@ -1881,7 +1881,7 @@ export const songdata = [
     key: 1,
     bpm: 84,
   },
-  {
+  /*{
     id: 359,
     artist: "Rocko",
     title: "Tomorrow",
@@ -1894,14 +1894,14 @@ export const songdata = [
     title: "Crank Dat Roadrunner",
     key: 2,
     bpm: 84,
-  },
-  {
+  },*/
+  /*{
     id: 361,
     artist: "Project Pat",
     title: "Good Googly Moogly",
     key: 1,
     bpm: 84,
-  },
+  },*/
   {
     id: 362,
     artist: "T.I.",
@@ -1951,27 +1951,27 @@ export const songdata = [
     key: 1,
     bpm: 84,
   },
-  {
+  /*{
     id: 372,
     artist: "Eminem",
     title: "Stan",
     key: 6,
     bpm: 84,
-  },
-  {
+  },*/
+  /*{
     id: 373,
     artist: "Billy Wes",
     title: "Shake That Jelly",
     key: 2,
     bpm: 84,
-  },
-  {
+  },*/
+  /*{
     id: 375,
     artist: "The Game",
     title: "Big Dreams",
     key: 1,
     bpm: 84,
-  },
+  },*/
   {
     id: 376,
     artist: "T.I.",
@@ -1993,13 +1993,13 @@ export const songdata = [
     key: 9,
     bpm: 84,
   },
-  {
+  /*{
     id: 382,
     artist: "Juvenile",
     title: "Rodeo",
     key: 11,
     bpm: 84,
-  },
+  },*/
   {
     id: 383,
     artist: "JR Writer",
@@ -2028,7 +2028,7 @@ export const songdata = [
     key: 4,
     bpm: 84,
   },
-  {
+ /* {
     id: 392,
     artist: "Youngbloodz",
     title: "85",
@@ -2041,7 +2041,7 @@ export const songdata = [
     title: "Put You In the Game",
     key: 6,
     bpm: 84,
-  },
+  },*/
    {
     id: 398,
     artist: "Pitbull",
@@ -2154,13 +2154,13 @@ export const songdata = [
     key: 1,
     bpm: 84,
   },
-  {
+  /*{
     id: 420,
     artist: "Above the Law",
     title: "Black Superman",
     key: 8,
     bpm: 84,
-  },
+  },*/
   {
     id: 421,
     artist: "Ron Browz",
@@ -2203,13 +2203,13 @@ export const songdata = [
     key: 2,
     bpm: 94,
   },
-  {
+ /* {
     id: 428,
     artist: "Junior MAFIA",
     title: "Players Anthem Remix",
     key: 11,
     bpm: 94,
-  },
+  },*/
    {
     id: 431,
     artist: "T.I.",
@@ -2455,13 +2455,13 @@ export const songdata = [
     key: 12,
     bpm: 94,
   },
-  {
+  /*{
     id: 474,
     artist: "Too Short",
     title: "Young Thang",
     key: 4,
     bpm: 94,
-  },
+  },*/
   {
     id: 476,
     artist: "2rare",
@@ -2469,13 +2469,13 @@ export const songdata = [
     key: 1,
     bpm: 94,
   },
-  {
+  /*{
     id: 478,
     artist: "The Game",
     title: "Violence",
     key: 8,
     bpm: 94,
-  },
+  },*/
   {
     id: 485,
     artist: "10 KANs",
@@ -2483,13 +2483,13 @@ export const songdata = [
     key: 9,
     bpm: 102,
   },
-  {
+  /*{
     id: 486,
     artist: "2Pac",
     title: "Still Ballin",
     key: 2,
     bpm: 102,
-  },
+  },*/
   {
     id: 487,
     artist: "Das EFX",
@@ -2497,13 +2497,13 @@ export const songdata = [
     key: 1,
     bpm: 102,
   },
-  {
+  /*{
     id: 488,
     artist: "Kurupt",
     title: "We Can Freak It",
     key: 12,
     bpm: 102,
-  },
+  },*/
   {
     id: 489,
     artist: "Wale",
@@ -2511,13 +2511,13 @@ export const songdata = [
     key: 1,
     bpm: 102,
   },
- {
+ /*{
     id: 492,
     artist: "Derek B",
     title: "Good Groove",
     key: 5,
     bpm: 102,
-  },
+  },*/
   {
     id: 493,
     artist: "50 Cent",
@@ -2525,13 +2525,13 @@ export const songdata = [
     key: 1,
     bpm: 102,
   },
-  {
+  /*{
     id: 496,
     artist: "LL Cool J",
     title: "Eat Em Up L Chill Remix",
     key: 1,
     bpm: 102,
-  },
+  },*/
   {
     id: 497,
     artist: "Fabolous",
@@ -2539,13 +2539,13 @@ export const songdata = [
     key: 1,
     bpm: 102,
   },
-  {
+  /*{
     id: 498,
     artist: "Diggy feat French Montana",
     title: "Ain't Bout to Do",
     key: 11,
     bpm: 102,
-  },
+  },*/
   {
     id: 499,
     artist: "DJ Khaled Lil Baby & Future",
@@ -2574,13 +2574,13 @@ export const songdata = [
     key: 3,
     bpm: 102,
   },
-  {
+  /*{
     id: 513,
     artist: "Shakira",
     title: "Hips Don't Lie",
     key: 3,
     bpm: 102,
-  },
+  },*/
   {
     id: 514,
     artist: "Beastie Boys",
@@ -2595,13 +2595,13 @@ export const songdata = [
     key: 1,
     bpm: 102,
   },
-  {
+  /*{
     id: 516,
     artist: "Frankie Cutlass",
     title: "Puerto Rico",
     key: 10,
     bpm: 102,
-  },
+  },*/
   {
     id: 517,
     artist: "T.I.",
@@ -2609,20 +2609,20 @@ export const songdata = [
     key: 9,
     bpm: 102,
   },
-  {
+  /*{
     id: 520,
     artist: "Notorious BIG",
     title: "Mo Money Mo Problems",
     key: 1,
     bpm: 102,
-  },
-  {
+  },*/
+  /*{
     id: 521,
     artist: "Showbiz & AG",
     title: "Party Groove",
     key: 10,
     bpm: 102,
-  },
+  },*/
   {
     id: 522,
     artist: "Mario",
@@ -2658,7 +2658,7 @@ export const songdata = [
         key: 7,
         bpm: 102,
     },
-    {
+    /*{
         id: 578,
         artist: "Mischif",
         title: "Drink In My Hand",
@@ -2692,14 +2692,14 @@ export const songdata = [
         title: "My Guy",
         key: 1,
         bpm: 102,
-    },
-    {
+    },*/
+    /*{
         id: 583,
         artist: "DJ Five Venoms ft Cliff Savage & Moe",
         title: "Replay",
         key: 1,
         bpm: 102,
-    },
+    },*/
     {
         id: 584,
         artist: "Black Sheep",
@@ -2707,13 +2707,13 @@ export const songdata = [
         key: 3,
         bpm: 102,
     },
-    {
+   /* {
         id: 585,
         artist: "69 Boys & Ying Yang Twins",
         title: "Grown Zone",
         key: 1,
         bpm: 102,
-    },
+    },*/
     {
         id: 586,
         artist: "Ying Yang Twins",
@@ -2728,7 +2728,7 @@ export const songdata = [
         key: 1,
         bpm: 102,
     },
-    {
+    /*{
         id: 588,
         artist: "Tash",
         title: "Rap Life",
@@ -2748,7 +2748,7 @@ export const songdata = [
         title: "Don't Play With It",
         key: 10,
         bpm: 102,
-    },
+    },*/
     {
         id: 591,
         artist: "Lil Jon & Mac Dre",
@@ -2756,20 +2756,20 @@ export const songdata = [
         key: 1,
         bpm: 102,
     },
-    {
+    /*{
         id: 592,
         artist: "Kalan FrFr feat Tyga",
         title: "Butterfly Coupe",
         key: 11,
         bpm: 102,
-    },
-    {
+    },*/
+    /*{
         id: 593,
         artist: "K.Comedy, Key Glock & Mac",
         title: "Sauce",
         key: 2,
         bpm: 102,
-    },
+    },*/
     {
         id: 594,
         artist: "Juvenile",
@@ -2777,14 +2777,14 @@ export const songdata = [
         key: 5,
         bpm: 102,
     },
-    {
+    /*{
         id: 595,
         artist: "Juice Froot",
         title: "Christmas List",
         key: 6,
         bpm: 102,
-    },
-    {
+    },*/
+    /*{
         id: 596,
         artist: "Guapdad 4000",
         title: "Cheap",
@@ -2797,7 +2797,7 @@ export const songdata = [
         title: "In My Bed",
         key: 6,
         bpm: 102,
-    },
+    },*/
     {
         id: 598,
         artist: "London Juve",
@@ -2805,13 +2805,13 @@ export const songdata = [
         key: 2,
         bpm: 102,
     },
-    {
+    /*{
         id: 599,
         artist: "Young Pooda",
         title: "Repeat",
         key: 10,
         bpm: 102,
-    },
+    },*/
     {
         id: 600,
         artist: "Ying Yang Twins",
@@ -2819,13 +2819,13 @@ export const songdata = [
         key: 1,
         bpm: 102,
     },
-    {
+    /*{
         id: 601,
         artist: "Ultramagnetic MCs",
         title: "Ease Back",
         key: 2,
         bpm: 102,
-    },
+    },*/
     {
         id: 602,
         artist: "Lil Kim",
@@ -2854,34 +2854,34 @@ export const songdata = [
         key: 1,
         bpm: 94,
     },
-    {
+    /*{
         id: 607,
         artist: "2 Chainz",
         title: "Million Dollars With of Game",
         key: 8,
         bpm: 94,
-    },
-    {
+    },*/
+    /*{
         id: 608,
         artist: "Yung Lott, Larry June & Big Guce",
         title: "Thuggin",
         key: 12,
         bpm: 94,
-    },
-    {
+    },*/
+    /*{
         id: 609,
         artist: "Young Boy Never Broke Again",
         title: "Don't Rate Me",
         key: 12,
         bpm: 94,
-    },
-    {
+    },*/
+    /*{
         id: 610,
         artist: "Young Roddy",
         title: "Weed & Women",
         key: 3,
         bpm: 94,
-    },
+    },*/
     {
         id: 611,
         artist: "Yella Beezy",
@@ -2903,13 +2903,13 @@ export const songdata = [
         key: 1,
         bpm: 94,
     },
-    {
+/*    {
         id: 619,
         artist: "NLE Choppa",
         title: "Glide With Me",
         key: 9,
         bpm: 94,
-    },
+    },*/
     {
         id: 620,
         artist: "Nicki Minaj",
@@ -2917,13 +2917,13 @@ export const songdata = [
         key: 7,
         bpm: 94,
     },
-    {
+    /*{
         id: 621,
         artist: "Lola Brooke",
         title: "Dummy Ummy",
         key: 11,
         bpm: 94,
-    },
+    },*/
     /*{
         id: 622,
         artist: "Nightcrawlers",

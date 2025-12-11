@@ -21,7 +21,7 @@
  * Options for QuantumRandom initialization.
  */
 export interface QuantumRandomOptions {
-  /** API endpoint for quantum random data. Default: 'https://api.shitchell.com/qrng' */
+  /** API endpoint for quantum random data. Default: 'https://api.shitchell.com/v1/quantum/random' */
   apiUrl?: string;
 
   /** Cache size in characters. Default: 2048 */
@@ -95,7 +95,7 @@ export class QuantumRandom {
   private isRefilling: boolean = false;
 
   constructor(options: QuantumRandomOptions = {}) {
-    this.apiUrl = options.apiUrl ?? 'https://api.shitchell.com/qrng';
+    this.apiUrl = options.apiUrl ?? 'https://api.shitchell.com/v1/quantum/random';
     this.cacheSize = options.cacheSize ?? 2048;
     this.refillThreshold = options.refillThreshold ?? 0.25;
     this.apiTimeout = options.apiTimeout ?? 5000;
@@ -132,7 +132,14 @@ export class QuantumRandom {
 
     const range = max - min + 1;
     const randomFloat = await this.getFloat();
-    return Math.floor(randomFloat * range) + min;
+    const result = Math.floor(randomFloat * range) + min;
+
+    // Validate result is in bounds
+    if (result < min || result > max) {
+      throw new Error(`Random integer ${result} out of bounds [${min}, ${max}]`);
+    }
+
+    return result;
   }
 
   /**
@@ -147,10 +154,24 @@ export class QuantumRandom {
     // Get 16 hex characters (64 bits) for high precision
     const hex = await this.getHexadecimal(16);
 
+    if (!hex || hex.length !== 16) {
+      throw new Error(`Invalid hex data: expected 16 chars, got ${hex?.length ?? 0}`);
+    }
+
     // Convert to number between 0 and 1
     const value = parseInt(hex, 16);
+    if (isNaN(value)) {
+      throw new Error(`Failed to parse hex: ${hex}`);
+    }
+
     const max = Math.pow(16, 16);
-    return value / max;
+    const result = value / max;
+
+    if (isNaN(result) || result < 0 || result >= 1) {
+      throw new Error(`Invalid random float: ${result}`);
+    }
+
+    return result;
   }
 
   /**
@@ -172,6 +193,15 @@ export class QuantumRandom {
     // Take from cache
     const hex = this.cache.slice(0, length);
     this.cache = this.cache.slice(length);
+
+    // Validate hex before returning
+    if (!/^[0-9a-f]*$/i.test(hex)) {
+      // Cache is corrupted, clear it and regenerate
+      this.cache = this.getCryptoHex(this.cacheSize);
+      this.storage?.removeItem('qrng-cache');
+      // Retry extraction
+      return this.cache.slice(0, length);
+    }
 
     // Save cache state
     this.saveCacheToStorage();
@@ -199,7 +229,7 @@ export class QuantumRandom {
     const index = await this.getInteger(0, array.length - 1);
     const item = array[index];
     if (item === undefined) {
-      throw new Error('Failed to get choice');
+      throw new Error(`Failed to get choice: index ${index} out of bounds for array length ${array.length}`);
     }
     return item;
   }
@@ -308,8 +338,8 @@ export class QuantumRandom {
     const threshold = this.cacheSize * this.refillThreshold;
 
     if (this.cache.length < threshold && !this.isRefilling) {
-      this.refillCache().catch((error) => {
-        console.warn('Failed to refill quantum cache:', error);
+      this.refillCache().catch(() => {
+        // Failed to refill quantum cache
       });
     }
   }
@@ -332,7 +362,9 @@ export class QuantumRandom {
       const timeoutId = setTimeout(() => controller.abort(), this.apiTimeout);
 
       try {
-        const response = await fetch(`${this.apiUrl}?length=${needed}`, {
+        // API expects hex16 data type and size parameter (max 1024)
+        const size = Math.min(Math.ceil(needed / 4), 1024); // Each hex16 gives 4 hex chars
+        const response = await fetch(`${this.apiUrl}?data_type=hex16&size=${size}`, {
           signal: controller.signal,
         });
 
@@ -340,9 +372,19 @@ export class QuantumRandom {
           throw new Error(`API returned ${response.status}`);
         }
 
-        const data = (await response.json()) as { data?: string };
-        if (typeof data.data === 'string') {
-          this.cache += data.data;
+        const result = (await response.json()) as { data?: string[] | string };
+
+        // API returns hex16 array, join and convert to hex string
+        if (Array.isArray(result.data)) {
+          const hexData = result.data.map(num => {
+            const numVal = typeof num === 'string' ? parseInt(num, 16) : num;
+            return numVal.toString(16).padStart(4, '0');
+          }).join('');
+          this.cache += hexData.slice(0, needed);
+          this.saveCacheToStorage();
+        } else if (typeof result.data === 'string') {
+          // Fallback if API returns string directly
+          this.cache += result.data.slice(0, needed);
           this.saveCacheToStorage();
         }
       } finally {
@@ -350,7 +392,6 @@ export class QuantumRandom {
       }
     } catch (error) {
       // Fallback to crypto if quantum API fails
-      console.warn('Quantum API unavailable, using crypto fallback');
       const needed = this.cacheSize - this.cache.length;
       this.cache += this.getCryptoHex(needed);
       this.saveCacheToStorage();
@@ -380,7 +421,14 @@ export class QuantumRandom {
   private loadCacheFromStorage(): void {
     const stored = this.storage?.getItem('qrng-cache');
     if (stored) {
-      this.cache = stored.slice(0, this.cacheSize);
+      // Validate that the stored cache only contains valid hex characters
+      if (/^[0-9a-f]*$/i.test(stored)) {
+        this.cache = stored.slice(0, this.cacheSize);
+      } else {
+        // Cache is corrupted, clear it
+        this.storage?.removeItem('qrng-cache');
+        this.cache = '';
+      }
     }
   }
 

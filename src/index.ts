@@ -111,6 +111,7 @@ export type {
 
 export { QuantumRandom, getQuantumRandom, resetQuantumRandom } from './random/QuantumRandom.js';
 export type { QuantumRandomOptions, RandomStorage } from './random/QuantumRandom.js';
+export { EnhancedRandom, enhancedRandom } from './random/EnhancedRandom.js';
 
 // ============================================================================
 // UTILITIES
@@ -129,6 +130,3 @@ export {
   DecodeError,
   LoadError,
 } from './audio/errors.js';
-
-console.log('🎵 Kwyjibo v2 - AI-Powered DJ System');
-console.log('   Clean. Modular. Testable. Professional.');

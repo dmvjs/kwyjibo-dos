@@ -12,10 +12,10 @@
  * Ensures perfect timing and seamless transitions using Web Audio API.
  */
 
-import type { Song, Key, Tempo, TrackType } from '../../src/music/types';
-import { BEAT_COUNTS, ALL_TEMPOS } from '../../src/music/types';
+import type { Song, Key, Tempo, TrackType } from '@/music/types';
+import { BEAT_COUNTS, ALL_TEMPOS } from '@/music/types';
 import { MUSIC_BASE_URL } from '../config';
-import { QuantumRandom } from '../../src/random/QuantumRandom';
+import { EnhancedRandom } from '@/random/EnhancedRandom';
 
 /**
  * Calculate the duration in seconds for a track at a given tempo.
@@ -118,11 +118,12 @@ export class HamiltonianPlayer {
   private hiddenTrackSwitchTimeout: number | null = null; // Timeout that sets up the interval
   private playedSongIds: Set<number> = new Set(); // Track which songs have been played
   private playedPairs: Set<string> = new Set(); // Track which pairs have been played (never repeat)
+  private pendingLoads: Map<string, Promise<AudioBuffer>> = new Map(); // Track in-progress loads to prevent duplicates
   private recentArtists: string[] = []; // Track recent artists for diversity
   private recentSongs: Song[] = []; // Track recently played songs
   private scheduledPairsCount: number = 0; // Track how many pairs are scheduled ahead
   private readonly MAX_SCHEDULED_PAIRS = 1; // Limit scheduling to prevent memory issues on iOS
-  private qrng: QuantumRandom; // Quantum random number generator for true randomness
+  private qrng: EnhancedRandom; // Enhanced random number generator with chaotic behavior
   private tempoPairCounts: Map<Tempo, number> = new Map(); // Weighted pair counts per tempo for equal distribution
 
   // 808 Mode - Frequency splitting for deconstructed beats
@@ -138,7 +139,7 @@ export class HamiltonianPlayer {
 
   constructor(songs: Song[], initialKey?: Key, initialTempo?: Tempo) {
     this.songs = songs;
-    this.qrng = new QuantumRandom();
+    this.qrng = new EnhancedRandom();
     this.hamiltonianPath = [...songs]; // Will be shuffled in init()
 
     // Initialize path indexes for each tempo
@@ -163,7 +164,6 @@ export class HamiltonianPlayer {
       const songCount = songCountsByTempo.get(tempo) || 1;
       const pairCount = Math.round(basePairCount * (songCount / minSongCount));
       this.tempoPairCounts.set(tempo, pairCount);
-      console.log(`🎵 Tempo ${tempo} BPM: ${songCount} songs → ${pairCount} pairs per cycle`);
     }
 
     // Store initial key/tempo for use in init
@@ -203,14 +203,11 @@ export class HamiltonianPlayer {
   async init(): Promise<void> {
     // Shuffle the Hamiltonian path with true randomness
     this.hamiltonianPath = await this.shuffleSongs([...this.songs]);
-    console.log('🎲 Hamiltonian path shuffled with quantum randomness');
 
     // Select random starting key (1-10) and tempo using quantum randomness
     const VALID_KEYS: Key[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     const randomKey = await this.qrng.getChoice(VALID_KEYS);
     const randomTempo = await this.qrng.getChoice(ALL_TEMPOS);
-
-    console.log(`🎲 Quantum random start: Key ${randomKey}, ${randomTempo} BPM`);
 
     // Regenerate progression from random starting point
     this.progression = this.generateProgressionFromPoint(randomKey, randomTempo);
@@ -227,8 +224,31 @@ export class HamiltonianPlayer {
       tempo: currentEntry.tempo,
       progressIndex: this.progressIndex,
     });
+  }
 
-    console.log(`✅ Player initialized: Key ${currentEntry.key}, ${currentEntry.tempo} BPM`);
+  /**
+   * Update songs list (e.g., when user changes settings).
+   * Re-initializes the player with the new song list.
+   */
+  async updateSongs(newSongs: Song[]): Promise<void> {
+    if (newSongs.length === 0) {
+      return;
+    }
+
+    // Stop current playback
+    this.stop();
+
+    // Update songs
+    this.songs = newSongs;
+
+    // Reset state
+    this.playedSongIds.clear();
+    this.playedPairs.clear();
+    this.recentArtists = [];
+    this.recentSongs = [];
+
+    // Re-initialize with new songs
+    await this.init();
   }
 
   /**
@@ -369,8 +389,6 @@ export class HamiltonianPlayer {
    * Uses quantum randomness for final selection from top candidates.
    */
   private async getNextSongSmart(tempo: Tempo, key: Key, partnerSong: Song | null = null, avoidArtists: string[] = [], avoidSongIds: number[] = []): Promise<Song> {
-    console.log(`🎯 Selecting next song: tempo=${tempo}, key=${key}, partner=${partnerSong?.artist || 'none'}`);
-
     // HAMILTONIAN PATH: Prioritize unplayed songs to ensure we cycle through all songs
     const unplayedSongs = this.songs.filter(song => !this.playedSongIds.has(song.id) && !avoidSongIds.includes(song.id));
     const shouldResetPlayedSongs = unplayedSongs.length < 20;
@@ -382,11 +400,6 @@ export class HamiltonianPlayer {
 
     // Try unplayed songs at correct tempo first (proper Hamiltonian behavior)
     let candidates = unplayedAtTempo.length > 0 ? unplayedAtTempo : allSongsAtTempo;
-    console.log(`   Candidate pool: ${candidates.length} songs at ${tempo} BPM (${unplayedAtTempo.length} unplayed, ${this.playedSongIds.size} played total)`);
-
-    if (shouldResetPlayedSongs) {
-      console.log('   ⚠️ Low unplayed song count - will reset after this selection');
-    }
 
     // Score all candidates
     const scored = candidates
@@ -399,11 +412,8 @@ export class HamiltonianPlayer {
 
     if (scored.length === 0) {
       // No valid candidates - try fallback strategies
-      console.log('⚠️ No valid candidates, trying fallback strategies...');
-
       // If we were only considering unplayed songs at tempo, expand to ALL songs at tempo
       if (candidates === unplayedAtTempo && unplayedAtTempo.length > 0) {
-        console.log('   → Expanding to all songs at tempo (including played)');
         candidates = allSongsAtTempo;
         const allScored = candidates
           .map(song => ({
@@ -416,7 +426,6 @@ export class HamiltonianPlayer {
         if (allScored.length > 0) {
           const topCandidates = allScored.slice(0, Math.min(20, allScored.length));
           const selected = await this.qrng.getChoice(topCandidates);
-          console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score}, from all songs at tempo)`);
           return selected.song;
         }
       }
@@ -432,14 +441,12 @@ export class HamiltonianPlayer {
 
       if (relaxed.length === 0) {
         // Last resort: just pick any song
-        console.log('⚠️ Last resort: picking any song from pool');
         return candidates[0]!;
       }
 
       // Pick from top 20 relaxed candidates for more variety
       const topRelaxed = relaxed.slice(0, Math.min(20, relaxed.length));
       const selected = await this.qrng.getChoice(topRelaxed);
-      console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score}, relaxed)`);
       return selected.song;
     }
 
@@ -447,13 +454,9 @@ export class HamiltonianPlayer {
     const topCandidates = scored.slice(0, Math.min(20, scored.length));
     const selected = await this.qrng.getChoice(topCandidates);
 
-    console.log(`✨ Selected ${selected.song.artist} - ${selected.song.title} (score: ${selected.score})`);
-    console.log(`   Top 20 scores: ${topCandidates.map(c => c.score).join(', ')}`);
-
     // Auto-reset played songs if we're running low on unplayed songs
     // This ensures continuous Hamiltonian cycling through all songs
     if (shouldResetPlayedSongs && this.playedSongIds.size > 0) {
-      console.log(`🔄 Resetting played songs (${this.playedSongIds.size} played, ${unplayedSongs.length} remaining)`);
       this.playedSongIds.clear();
       // Also reset played pairs to allow fresh combinations
       this.playedPairs.clear();
@@ -473,7 +476,6 @@ export class HamiltonianPlayer {
   private getNextSong(tempo: Tempo, avoidArtists: string[] = []): Song {
     // Safety check: ensure we have songs and a path
     if (!this.hamiltonianPath || this.hamiltonianPath.length === 0) {
-      console.log('🔄 Hamiltonian path empty - using unshuffled songs as fallback');
       this.hamiltonianPath = [...this.songs];
       for (const t of ALL_TEMPOS) {
         this.pathIndexesByTempo.set(t, 0);
@@ -530,7 +532,6 @@ export class HamiltonianPlayer {
           return fallbackSong;
         }
 
-        console.log(`🔄 Reshuffling entire Hamiltonian path (all ${this.songs.length} songs) - using unshuffled as fallback`);
         this.hamiltonianPath = [...this.songs]; // Use unshuffled songs as emergency fallback
         // Reset all tempo indexes
         for (const t of ALL_TEMPOS) {
@@ -546,7 +547,6 @@ export class HamiltonianPlayer {
       return fallbackSong;
     }
 
-    console.log('⚠️ getNextSong exceeded max attempts - using unshuffled songs as fallback');
     this.hamiltonianPath = [...this.songs]; // Use unshuffled songs as emergency fallback
     for (const t of ALL_TEMPOS) {
       this.pathIndexesByTempo.set(t, 0);
@@ -669,26 +669,26 @@ export class HamiltonianPlayer {
    * Update gain values for hidden tracks (Mannie Fresh mode).
    * Track 3 and 4 alternate every 4 bars at configured volume when enabled.
    */
-  private updateHiddenTrackGains(): void {
+  private updateHiddenTrackGains(fadeTime: number = 0.015): void {
     if (!this.track3Gain || !this.track4Gain || !this.audioContext) return;
 
     const now = this.audioContext.currentTime;
 
     if (this.eightZeroEightMode) {
       // In 808 mode, all tracks play at full volume (routing is handled by 808 processing)
-      this.track3Gain.gain.setTargetAtTime(1.0, now, 0.015);
-      this.track4Gain.gain.setTargetAtTime(1.0, now, 0.015);
+      this.track3Gain.gain.setTargetAtTime(1.0, now, fadeTime);
+      this.track4Gain.gain.setTargetAtTime(1.0, now, fadeTime);
     } else if (this.mannieFreshMode) {
       // Apply volume setting to the active hidden track, silent for the inactive one
       const gain3 = this.currentHiddenTrack === 3 ? this.mannieFreshVolume : 0;
       const gain4 = this.currentHiddenTrack === 4 ? this.mannieFreshVolume : 0;
 
-      this.track3Gain.gain.setTargetAtTime(gain3, now, 0.015);
-      this.track4Gain.gain.setTargetAtTime(gain4, now, 0.015);
+      this.track3Gain.gain.setTargetAtTime(gain3, now, fadeTime);
+      this.track4Gain.gain.setTargetAtTime(gain4, now, fadeTime);
     } else {
       // Silent when both modes are off
-      this.track3Gain.gain.setTargetAtTime(0, now, 0.015);
-      this.track4Gain.gain.setTargetAtTime(0, now, 0.015);
+      this.track3Gain.gain.setTargetAtTime(0, now, fadeTime);
+      this.track4Gain.gain.setTargetAtTime(0, now, fadeTime);
     }
   }
 
@@ -708,10 +708,6 @@ export class HamiltonianPlayer {
   private setupMFSwitchesForCurrentPair(pair: TrackPair, mainStartTime: number): void {
     if (!this.audioContext) return;
 
-    console.log(
-      `🎵 Setting up MF switches for current pair: tempo=${pair.tempo}, 4-bar duration=${this.calculate4BarDuration(pair.tempo).toFixed(3)}s`
-    );
-
     // ALWAYS clear any existing switches
     if (this.hiddenTrackSwitchTimeout !== null) {
       clearTimeout(this.hiddenTrackSwitchTimeout);
@@ -725,10 +721,6 @@ export class HamiltonianPlayer {
     // Reset hidden track state and set gains
     this.currentHiddenTrack = 3;
     this.updateHiddenTrackGains();
-
-    console.log(
-      `🔊 Track 3 gain: ${this.track3Gain!.gain.value}, Track 4 gain: ${this.track4Gain!.gain.value}`
-    );
 
     // Start switching at main section start
     const firstSwitchTime = mainStartTime;
@@ -758,15 +750,6 @@ export class HamiltonianPlayer {
         this.updateState({
           activeHiddenTrack: this.mannieFreshMode ? this.currentHiddenTrack : null,
         });
-
-        const switchType = nextSwitchTime === firstSwitchTime ? 'Main started' : 'Beat boundary';
-        const actualTime = this.audioContext!.currentTime;
-        const scheduledTime = nextSwitchTime;
-        const drift = Math.abs(actualTime - scheduledTime) * 1000;
-        console.log(
-          `🔄 Mannie Fresh: ${switchType}, switched to track ${this.currentHiddenTrack} ` +
-          `(tempo: ${currentPairTempo}, scheduled: ${scheduledTime.toFixed(3)}s, actual: ${actualTime.toFixed(3)}s, drift: ${drift.toFixed(1)}ms)`
-        );
 
         // Schedule next switch using CURRENT pair's tempo, not captured tempo
         const nextTime = nextSwitchTime + currentFourBarDuration;
@@ -820,17 +803,12 @@ export class HamiltonianPlayer {
     }
 
     this.mannieFreshMode = !this.mannieFreshMode;
-    this.updateHiddenTrackGains();
+    // Use 0.8 second fade for smooth transition
+    this.updateHiddenTrackGains(0.8);
     this.updateState({
       mannieFreshMode: this.mannieFreshMode,
       activeHiddenTrack: this.mannieFreshMode ? this.currentHiddenTrack : null,
     });
-
-    if (this.mannieFreshMode) {
-      console.log('🎵 Mannie Fresh mode ACTIVATED - Tracks will alternate every 8 beats');
-    } else {
-      console.log('🎵 Mannie Fresh mode DEACTIVATED');
-    }
 
     // Note: Switching is handled by the beat-synced interval set up when the pair starts.
     // No need to create a new interval here - just let the existing one handle it.
@@ -851,15 +829,15 @@ export class HamiltonianPlayer {
     this.eightZeroEightMode = !this.eightZeroEightMode;
 
     if (this.eightZeroEightMode) {
-      console.log('🥁 808 Mode ACTIVATED - Frequency split & rhythmic recombination engaged');
-      this.updateHiddenTrackGains(); // Enable tracks 3 & 4
+      // Use 0.8 second fade for smooth transition
+      this.updateHiddenTrackGains(0.8); // Enable tracks 3 & 4
       this.apply808Processing();
       this.startRhythmicGating();
     } else {
-      console.log('🥁 808 Mode DEACTIVATED');
       this.remove808Processing();
       this.stopRhythmicGating();
-      this.updateHiddenTrackGains(); // Disable tracks 3 & 4
+      // Use 0.8 second fade for smooth transition
+      this.updateHiddenTrackGains(0.8); // Disable tracks 3 & 4
     }
 
     this.updateState({
@@ -874,11 +852,8 @@ export class HamiltonianPlayer {
    */
   private apply808Processing(): void {
     if (!this.audioContext || !this.track1Gain || !this.track2Gain || !this.track3Gain || !this.track4Gain) {
-      console.warn('⚠️ Cannot apply 808 processing - audio context not initialized');
       return;
     }
-
-    console.log('🔊 Setting up frequency splitting for 808 mode...');
 
     // Create filter banks for each track
     // Each track gets: LOW (20-250Hz), MID (250-3000Hz), HIGH (3000-20000Hz)
@@ -889,16 +864,12 @@ export class HamiltonianPlayer {
 
     // Rewire the audio graph with 808 processing
     this.reconnectWith808Processing();
-
-    console.log('✅ 808 Mode frequency splitting active');
   }
 
   /**
    * Remove 808 mode processing and restore normal routing.
    */
   private remove808Processing(): void {
-    console.log('🔌 Removing 808 mode processing...');
-
     // Disconnect and clear rhythmic gain nodes
     for (const node of this.rhythmicGainNodes) {
       if (node) {
@@ -953,8 +924,6 @@ export class HamiltonianPlayer {
       this.track3Gain.connect(this.masterCompressor);
       this.track4Gain.connect(this.masterCompressor);
     }
-
-    console.log('✅ Normal audio routing restored');
   }
 
   /**
@@ -1062,8 +1031,6 @@ export class HamiltonianPlayer {
 
     // Store references for cleanup
     this.rhythmicGainNodes = [lowBus, midBus, highBus];
-
-    console.log('🎛️ 808 Mode routing: T1(LOW) + T2(MID) + T3(HIGH) + T4(LOW) → 808 Compressor (+8dB makeup)');
   }
 
   /**
@@ -1078,8 +1045,6 @@ export class HamiltonianPlayer {
 
     // Stop any existing pattern
     this.stopRhythmicGating();
-
-    console.log(`🎵 Starting rhythmic gating at ${tempo} BPM (${beatDuration.toFixed(3)}s per beat)`);
 
     let patternStep = 0;
 
@@ -1124,8 +1089,6 @@ export class HamiltonianPlayer {
     // Update pattern every beat
     this.rhythmicPatternInterval = window.setInterval(updatePattern, beatDuration * 1000);
     updatePattern(); // Initial update
-
-    console.log('✅ Rhythmic gating started');
   }
 
   /**
@@ -1135,7 +1098,6 @@ export class HamiltonianPlayer {
     if (this.rhythmicPatternInterval !== null) {
       clearInterval(this.rhythmicPatternInterval);
       this.rhythmicPatternInterval = null;
-      console.log('⏹️ Rhythmic gating stopped');
     }
 
     // Reset gain nodes to default levels
@@ -1267,13 +1229,6 @@ export class HamiltonianPlayer {
         throw new Error('Failed to create hidden tracks');
       }
 
-      console.log(
-        `🎵 Mannie Fresh: Track 3: ${track3.song.title} (${track3.song.artist}) in key ${track3.key}`
-      );
-      console.log(
-        `🎵 Mannie Fresh: Track 4: ${track4.song.title} (${track4.song.artist}) in key ${track4.key}`
-      );
-
       // Load audio for both hidden tracks (unless already provided)
       let intro3Buffer: AudioBuffer, main3Buffer: AudioBuffer, intro4Buffer: AudioBuffer, main4Buffer: AudioBuffer;
       if (preloadedBuffers) {
@@ -1297,9 +1252,12 @@ export class HamiltonianPlayer {
       // Schedule Track 3 (intro + main)
       const intro3Source = ctx.createBufferSource();
       intro3Source.buffer = intro3Buffer;
-      intro3Source.connect(this.track3Gain!);
+      // Create gain node for intro at 75% volume
+      const intro3Gain = ctx.createGain();
+      intro3Gain.gain.setValueAtTime(0.75, pairStartTime);
+      intro3Source.connect(intro3Gain);
+      intro3Gain.connect(this.track3Gain!);
       intro3Source.start(pairStartTime);
-      console.log(`▶️ Started Track 3 intro at ${pairStartTime}`);
       intro3Source.onended = (): void => {
         intro3Source.disconnect();
         const idx = this.currentSources.indexOf(intro3Source);
@@ -1311,7 +1269,6 @@ export class HamiltonianPlayer {
       main3Source.buffer = main3Buffer;
       main3Source.connect(this.track3Gain!);
       main3Source.start(mainStartTime);
-      console.log(`▶️ Scheduled Track 3 main at ${mainStartTime}`);
       main3Source.onended = (): void => {
         main3Source.disconnect();
         const idx = this.currentSources.indexOf(main3Source);
@@ -1324,7 +1281,6 @@ export class HamiltonianPlayer {
       intro4Source.buffer = intro4Buffer;
       intro4Source.connect(this.track4Gain!);
       intro4Source.start(pairStartTime);
-      console.log(`▶️ Started Track 4 intro at ${pairStartTime}`);
       intro4Source.onended = (): void => {
         intro4Source.disconnect();
         const idx = this.currentSources.indexOf(intro4Source);
@@ -1336,7 +1292,6 @@ export class HamiltonianPlayer {
       main4Source.buffer = main4Buffer;
       main4Source.connect(this.track4Gain!);
       main4Source.start(mainStartTime);
-      console.log(`▶️ Scheduled Track 4 main at ${mainStartTime}`);
       main4Source.onended = (): void => {
         main4Source.disconnect();
         const idx = this.currentSources.indexOf(main4Source);
@@ -1350,7 +1305,7 @@ export class HamiltonianPlayer {
       }
 
     } catch (err) {
-      console.error('Error scheduling hidden tracks:', err);
+      // Error scheduling hidden tracks
     }
   }
 
@@ -1361,7 +1316,7 @@ export class HamiltonianPlayer {
         try {
           (listener as EventListener<PlayerEvents[K]>)(data);
         } catch (err) {
-          console.error(`Error in ${event} listener:`, err);
+          // Error in event listener
         }
       });
     }
@@ -1434,7 +1389,6 @@ export class HamiltonianPlayer {
     }
 
     // Pair 1: Use smart selection with key/tempo constraints
-    console.log('🎵 Selecting pair 1...');
     const song1a = await this.getNextSongSmart(entry1.tempo, entry1.key, null, this.recentArtists.slice(0, 10));
     const song1b = await this.getNextSongSmart(entry1.tempo, entry1.key, song1a, [...this.recentArtists.slice(0, 10), song1a.artist]);
 
@@ -1448,7 +1402,6 @@ export class HamiltonianPlayer {
     if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
 
     // Pair 2: avoid same artist within pair and artists from pair 1
-    console.log('🎵 Selecting pair 2...');
     const song2a = await this.getNextSongSmart(entry2.tempo, entry2.key, null, [...this.recentArtists.slice(0, 10), song1a.artist, song1b.artist]);
     const song2b = await this.getNextSongSmart(entry2.tempo, entry2.key, song2a, [...this.recentArtists.slice(0, 10), song2a.artist, song1a.artist, song1b.artist]);
 
@@ -1467,7 +1420,6 @@ export class HamiltonianPlayer {
     // Add hidden tracks to currentPair (first pair)
     const currentRelatedKey3 = await this.getMusicallyRelatedKey(entry1.key);
     const currentRelatedKey4 = await this.getMusicallyRelatedKey(entry1.key);
-    console.log('🎵 Selecting hidden tracks for pair 1...');
     const currentSong3 = await this.getNextSongSmart(entry1.tempo, currentRelatedKey3, null, [song1a.artist, song1b.artist], [song1a.id, song1b.id]);
     const currentSong4 = await this.getNextSongSmart(entry1.tempo, currentRelatedKey4, null, [song1a.artist, song1b.artist, currentSong3.artist], [song1a.id, song1b.id, currentSong3.id]);
     this.playedSongIds.add(currentSong3.id);
@@ -1483,7 +1435,6 @@ export class HamiltonianPlayer {
     // Add hidden tracks to nextPair
     const relatedKey3 = await this.getMusicallyRelatedKey(entry2.key);
     const relatedKey4 = await this.getMusicallyRelatedKey(entry2.key);
-    console.log('🎵 Selecting hidden tracks for pair 2...');
     const song3 = await this.getNextSongSmart(entry2.tempo, relatedKey3, null, [song2a.artist, song2b.artist], [song2a.id, song2b.id]);
     const song4 = await this.getNextSongSmart(entry2.tempo, relatedKey4, null, [song2a.artist, song2b.artist, song3.artist], [song2a.id, song2b.id, song3.id]);
     this.playedSongIds.add(song3.id);
@@ -1564,7 +1515,11 @@ export class HamiltonianPlayer {
       // Schedule Track 1 intro + main with Web Audio API (sample-accurate)
       const intro1Source = ctx.createBufferSource();
       intro1Source.buffer = intro1Buffer;
-      intro1Source.connect(this.track1Gain!);
+      // Create gain node for intro at 75% volume
+      const intro1Gain = ctx.createGain();
+      intro1Gain.gain.setValueAtTime(0.75, this.pairStartTime);
+      intro1Source.connect(intro1Gain);
+      intro1Gain.connect(this.track1Gain!);
       intro1Source.start(this.pairStartTime);
       intro1Source.onended = (): void => {
         intro1Source.disconnect();
@@ -1587,7 +1542,11 @@ export class HamiltonianPlayer {
       // Schedule Track 2 intro + main with Web Audio API (sample-accurate)
       const intro2Source = ctx.createBufferSource();
       intro2Source.buffer = intro2Buffer;
-      intro2Source.connect(this.track2Gain!);
+      // Create gain node for intro at 75% volume
+      const intro2Gain = ctx.createGain();
+      intro2Gain.gain.setValueAtTime(0.75, this.pairStartTime);
+      intro2Source.connect(intro2Gain);
+      intro2Gain.connect(this.track2Gain!);
       intro2Source.start(this.pairStartTime);
       intro2Source.onended = (): void => {
         intro2Source.disconnect();
@@ -1666,9 +1625,7 @@ export class HamiltonianPlayer {
 
       // Preload next pair immediately
       if (!this.state.nextPair) return;
-      console.log(`🔄 Preloading pair to schedule at time ${startTime.toFixed(2)}`);
       await this.preloadNextPair(this.state.nextPair);
-      console.log(`✅ Preload complete`);
 
       const pairToSchedule = this.state.nextPair;
 
@@ -1687,10 +1644,13 @@ export class HamiltonianPlayer {
       const pairEndTime = mainStartTime + idealMainDuration;
 
       // Schedule all 4 sources at precise times
-      console.log(`🎵 Scheduling pair at time ${startTime.toFixed(2)} (current: ${ctx.currentTime.toFixed(2)}, delta: ${(startTime - ctx.currentTime).toFixed(2)}s)`);
       const intro1Source = ctx.createBufferSource();
       intro1Source.buffer = intro1Buffer;
-      intro1Source.connect(this.track1Gain!);
+      // Create gain node for intro at 75% volume
+      const intro1Gain = ctx.createGain();
+      intro1Gain.gain.setValueAtTime(0.75, startTime);
+      intro1Source.connect(intro1Gain);
+      intro1Gain.connect(this.track1Gain!);
       intro1Source.start(startTime);
 
       // Clean up source after it finishes to prevent memory leaks
@@ -1715,7 +1675,11 @@ export class HamiltonianPlayer {
 
       const intro2Source = ctx.createBufferSource();
       intro2Source.buffer = intro2Buffer;
-      intro2Source.connect(this.track2Gain!);
+      // Create gain node for intro at 75% volume
+      const intro2Gain = ctx.createGain();
+      intro2Gain.gain.setValueAtTime(0.75, startTime);
+      intro2Source.connect(intro2Gain);
+      intro2Gain.connect(this.track2Gain!);
       intro2Source.start(startTime);
 
       intro2Source.onended = (): void => {
@@ -1754,7 +1718,6 @@ export class HamiltonianPlayer {
         throw new Error('Failed to get next progression entry');
       }
 
-      console.log('🎵 Selecting next scheduled pair...');
       const avoidArtists = [
         ...this.recentArtists.slice(0, 10),
         pairToSchedule.track1.song.artist,
@@ -1837,34 +1800,124 @@ export class HamiltonianPlayer {
   }
 
   /**
-   * Load audio buffer.
+   * Load audio buffer with retry logic.
    */
-  private async loadAudioBuffer(url: string): Promise<AudioBuffer> {
+  private async loadAudioBuffer(url: string, retryCount = 0): Promise<AudioBuffer> {
+
     // Check if already cached
     if (this.preloadedBuffers.has(url)) {
-      console.log(`📦 Using cached buffer for ${url.split('/').pop()}`);
       return this.preloadedBuffers.get(url)!;
     }
 
-    console.log(`⬇️ Downloading ${url.split('/').pop()}`);
-    const ctx = this.ensureAudioContext();
-    const response = await fetch(url);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = await ctx.decodeAudioData(arrayBuffer);
-
-    // Cache it for future use (keep in cache, don't delete)
-    this.preloadedBuffers.set(url, buffer);
-
-    // Limit cache size to prevent memory issues on iOS
-    // Keep only the most recent 12 buffers (3 pairs × 4 files)
-    if (this.preloadedBuffers.size > 12) {
-      const firstKey = this.preloadedBuffers.keys().next().value as string;
-      if (firstKey) {
-        this.preloadedBuffers.delete(firstKey);
-      }
+    // Check if already loading - return the existing promise to prevent duplicates
+    if (this.pendingLoads.has(url)) {
+      return await this.pendingLoads.get(url)!;
     }
 
-    return buffer;
+    // Create a promise for this load and store it
+    const loadPromise = this.performLoad(url, retryCount);
+    this.pendingLoads.set(url, loadPromise);
+
+    try {
+      const buffer = await loadPromise;
+      this.pendingLoads.delete(url);
+      return buffer;
+    } catch (err) {
+      this.pendingLoads.delete(url);
+      throw err;
+    }
+  }
+
+  /**
+   * Perform the actual load operation.
+   */
+  private async performLoad(url: string, retryCount: number): Promise<AudioBuffer> {
+    const MAX_RETRIES = 3;
+    const fileName = url.split('/').pop() || url;
+    const ctx = this.ensureAudioContext();
+
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+
+      // Validate the download
+      if (arrayBuffer.byteLength === 0) {
+        throw new Error('Empty file received');
+      }
+
+
+      // Check AudioContext state
+      if (ctx.state !== 'running' && ctx.state !== 'suspended') {
+        throw new Error(`AudioContext in unexpected state: ${ctx.state}`);
+      }
+
+      // Validate audio file header
+      // Support: WAV (RIFF), AIFF (FORM), MP3 (ID3 or 0xFF sync), and others
+      const header = new Uint8Array(arrayBuffer.slice(0, 4));
+      const headerStr = String.fromCharCode(...header);
+      const firstByte = header[0];
+
+      // Check for valid audio headers
+      const isWAV = headerStr === 'RIFF';
+      const isAIFF = headerStr === 'FORM';
+      const isMP3 = headerStr.startsWith('ID3') || firstByte === 0xFF; // ID3 tag or MP3 frame sync
+      const isValid = isWAV || isAIFF || isMP3;
+
+      if (!isValid) {
+        throw new Error(`Invalid audio file header for ${fileName}: "${headerStr}"`);
+      }
+
+
+      // Clone the arrayBuffer for decoding (prevents issues if buffer is modified)
+      const bufferCopy = arrayBuffer.slice(0);
+
+      // Decode audio data
+      let buffer: AudioBuffer;
+      try {
+        buffer = await ctx.decodeAudioData(bufferCopy);
+      } catch (decodeErr) {
+        // If promise-based fails, try callback-based (some browsers prefer this)
+        const bufferCopy2 = arrayBuffer.slice(0);
+        buffer = await new Promise<AudioBuffer>((resolve, reject) => {
+          ctx.decodeAudioData(
+            bufferCopy2,
+            (decodedBuffer) => resolve(decodedBuffer),
+            (err) => reject(new Error(`Decode failed: ${err?.message || 'Unknown error'}`))
+          );
+        });
+      }
+
+      // Cache for future use
+      this.preloadedBuffers.set(url, buffer);
+
+      // Limit cache size to prevent memory issues on iOS
+      // Keep only the most recent 12 buffers (3 pairs × 4 files)
+      if (this.preloadedBuffers.size > 12) {
+        const firstKey = this.preloadedBuffers.keys().next().value as string;
+        if (firstKey) {
+          this.preloadedBuffers.delete(firstKey);
+        }
+      }
+
+      return buffer;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+
+      // Retry logic for intermittent failures
+      if (retryCount < MAX_RETRIES) {
+        const delay = Math.pow(2, retryCount) * 500; // Exponential backoff: 500ms, 1s, 2s
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.loadAudioBuffer(url, retryCount + 1);
+      }
+
+      // After all retries failed, throw detailed error
+      throw new Error(`Failed to load ${fileName} after ${MAX_RETRIES} retries: ${errorMsg}`);
+    }
   }
 
   /**
@@ -1872,7 +1925,6 @@ export class HamiltonianPlayer {
    */
   private async preloadNextPair(pair: TrackPair): Promise<void> {
     try {
-      const ctx = this.ensureAudioContext();
       const urls = [
         pair.track1.introUrl,
         pair.track1.mainUrl,
@@ -1880,19 +1932,14 @@ export class HamiltonianPlayer {
         pair.track2.mainUrl,
       ];
 
-      // Load all 4 files in parallel and cache them
-      await Promise.all(
-        urls.map(async (url) => {
-          if (!this.preloadedBuffers.has(url)) {
-            const response = await fetch(url);
-            const arrayBuffer = await response.arrayBuffer();
-            const buffer = await ctx.decodeAudioData(arrayBuffer);
-            this.preloadedBuffers.set(url, buffer);
-          }
-        })
+      // Load all files in parallel
+      await Promise.allSettled(
+        urls.map(url =>
+          this.preloadedBuffers.has(url) ? Promise.resolve() : this.loadAudioBuffer(url)
+        )
       );
     } catch (err) {
-      console.error('Error preloading next pair:', err);
+      // Preload failures are non-critical
     }
   }
 
@@ -2043,11 +2090,9 @@ export class HamiltonianPlayer {
 
     // If we've played most songs, reset and use all songs
     if (unplayedSongs.length < 20) {
-      console.log('🔄 Most songs played - resetting Hamiltonian path with all songs (unshuffled)');
       this.playedSongIds.clear();
       this.hamiltonianPath = [...this.songs]; // Use unshuffled songs - main randomness comes from init()
     } else {
-      console.log(`🔄 Recalculating Hamiltonian path with ${unplayedSongs.length} unplayed songs (unshuffled)`);
       this.hamiltonianPath = unplayedSongs; // Use unshuffled unplayed songs
     }
 
@@ -2144,7 +2189,6 @@ export class HamiltonianPlayer {
 
     // Don't touch MF switches when tempo changes - let current pair finish with
     // its original tempo timing. Next pair will start with correct new tempo.
-    console.log(`🎵 Tempo changed to ${tempo} - will take effect on next pair`);
 
     // Recalculate Hamiltonian path starting from this tempo
     const currentKey = this.state.key;
