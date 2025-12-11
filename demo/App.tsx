@@ -448,11 +448,26 @@ function App(): React.ReactElement {
             <div className="section-label played-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', paddingRight: '12px' }}>
               <span>PLAYLIST ({completeMix.length} {completeMix.length === 1 ? 'SET' : 'SETS'})</span>
             </div>
-            {completeMix.map((pair, idx) => (
+            {completeMix.map((pair, idx) => {
+              // Calculate rarity tier for color coding
+              const rarityTier = pair.rarity !== undefined
+                ? pair.rarity < 0.3 ? 'common'
+                  : pair.rarity < 0.5 ? 'uncommon'
+                  : pair.rarity < 0.7 ? 'rare'
+                  : pair.rarity < 0.85 ? 'epic'
+                  : 'legendary'
+                : 'common';
+
+              return (
               <div key={`playlist-${idx}`} className="playlist-pair played">
                 <div className="pair-meta">
                   <span className="pair-key">{KEY_NAMES[pair.key - 1]}</span>
                   <span className="pair-tempo">{pair.tempo}</span>
+                  {pair.probability && (
+                    <span className={`rarity-badge ${rarityTier}`} title={`Combination hash: ${pair.comboHash || 'N/A'}`}>
+                      {pair.probability}
+                    </span>
+                  )}
                 </div>
                 <div className="pair-tracks">
                   <div className="playlist-track">
@@ -473,7 +488,8 @@ function App(): React.ReactElement {
                   )}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}

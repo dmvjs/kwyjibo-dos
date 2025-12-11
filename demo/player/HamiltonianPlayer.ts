@@ -50,6 +50,9 @@ export interface TrackPair {
   track4?: Track; // Mannie Fresh mode hidden track
   key: Key;
   tempo: Tempo;
+  comboHash?: string; // Unique identifier for this 4-song combination
+  rarity?: number; // Rarity score 0-1 (0 = common, 1 = legendary)
+  probability?: string; // Human-readable probability (e.g., "1 in 1.8M")
 }
 
 /**
@@ -129,6 +132,14 @@ export class HamiltonianPlayer {
   private readonly MAX_SCHEDULED_PAIRS = 1; // Limit scheduling to prevent memory issues on iOS
   private qrng: EnhancedRandom; // Enhanced random number generator with chaotic behavior
   private tempoPairCounts: Map<Tempo, number> = new Map(); // Weighted pair counts per tempo for equal distribution
+
+  // Combination space per tempo (for rarity calculation)
+  private readonly TEMPO_COMBINATIONS: Map<Tempo, number> = new Map([
+    [84, 40432700],  // 178 songs → C(178, 4) combinations
+    [94, 1837620],   // 83 songs → C(83, 4) combinations
+    [102, 7673835],  // 118 songs → C(118, 4) combinations
+  ]);
+  private readonly TOTAL_COMBINATIONS = 49944155; // Sum of all tempo combinations
 
   // 808 Mode - Frequency splitting for deconstructed beats
   private eightZeroEightMode: boolean = false;
@@ -647,6 +658,79 @@ export class HamiltonianPlayer {
       track2: this.createTrack(song2, key, tempo),
       key,
       tempo,
+    };
+  }
+
+  /**
+   * Calculate rarity metrics for a complete 4-song combination.
+   * Returns hash, rarity score, and probability string.
+   */
+  private calculateComboRarity(pair: TrackPair): { comboHash: string; rarity: number; probability: string } {
+    if (!pair.track3 || !pair.track4) {
+      // Incomplete pair, return default
+      return {
+        comboHash: '',
+        rarity: 0,
+        probability: '',
+      };
+    }
+
+    // Create sorted array of song IDs for unique hash
+    const songIds = [
+      pair.track1.song.id,
+      pair.track2.song.id,
+      pair.track3.song.id,
+      pair.track4.song.id,
+    ].sort((a, b) => a - b);
+
+    // Generate hash from sorted IDs
+    const comboHash = songIds.join('-');
+
+    // Calculate base probability from tempo space
+    const tempoCombos = this.TEMPO_COMBINATIONS.get(pair.tempo) || 1;
+    const baseProbability = 1 / tempoCombos;
+
+    // Calculate rarity multipliers based on constraints
+    let rarityMultiplier = 1.0;
+
+    // Key diversity (different keys = rarer)
+    const keys = [pair.track1.song.key, pair.track2.song.key, pair.track3.song.key, pair.track4.song.key];
+    const uniqueKeys = new Set(keys).size;
+    rarityMultiplier *= Math.pow(1.5, uniqueKeys - 1); // More unique keys = rarer
+
+    // Key distance from pair key (distant keys = rarer)
+    const keyDistances = keys.map(k => {
+      const diff = Math.abs(k - pair.key);
+      return Math.min(diff, 12 - diff);
+    });
+    const avgKeyDistance = keyDistances.reduce((sum, d) => sum + d, 0) / 4;
+    rarityMultiplier *= (1 + avgKeyDistance / 6); // Normalize to 0-2x range
+
+    // Artist diversity (all different artists = rarer)
+    const artists = [pair.track1.song.artist, pair.track2.song.artist, pair.track3.song.artist, pair.track4.song.artist];
+    const uniqueArtists = new Set(artists).size;
+    rarityMultiplier *= Math.pow(1.3, uniqueArtists - 1); // All unique = ~2.2x rarer
+
+    // Calculate final rarity score (0-1 scale, where 1 = legendary)
+    // Use logarithmic scale to spread out the rarity tiers
+    const adjustedProbability = baseProbability / rarityMultiplier;
+    const rarity = Math.min(1, Math.max(0, 1 - Math.log10(adjustedProbability * tempoCombos) / Math.log10(tempoCombos)));
+
+    // Format probability string
+    const odds = Math.round(1 / adjustedProbability);
+    let probability: string;
+    if (odds >= 1000000) {
+      probability = `1 in ${(odds / 1000000).toFixed(1)}M`;
+    } else if (odds >= 1000) {
+      probability = `1 in ${(odds / 1000).toFixed(1)}K`;
+    } else {
+      probability = `1 in ${odds}`;
+    }
+
+    return {
+      comboHash,
+      rarity,
+      probability,
     };
   }
 
@@ -1531,6 +1615,12 @@ export class HamiltonianPlayer {
     currentPair.track3 = this.createTrack(currentSong3, currentRelatedKey3, entry1.tempo);
     currentPair.track4 = this.createTrack(currentSong4, currentRelatedKey4, entry1.tempo);
 
+    // Calculate and add rarity for currentPair
+    const currentRarity = this.calculateComboRarity(currentPair);
+    currentPair.comboHash = currentRarity.comboHash;
+    currentPair.rarity = currentRarity.rarity;
+    currentPair.probability = currentRarity.probability;
+
     // Add hidden tracks to nextPair
     const relatedKey3 = await this.getMusicallyRelatedKey(entry2.key);
     const relatedKey4 = await this.getMusicallyRelatedKey(entry2.key);
@@ -1545,6 +1635,12 @@ export class HamiltonianPlayer {
     if (this.recentArtists.length > 30) this.recentArtists = this.recentArtists.slice(0, 30);
     nextPair.track3 = this.createTrack(song3, relatedKey3, entry2.tempo);
     nextPair.track4 = this.createTrack(song4, relatedKey4, entry2.tempo);
+
+    // Calculate and add rarity for nextPair
+    const nextRarity = this.calculateComboRarity(nextPair);
+    nextPair.comboHash = nextRarity.comboHash;
+    nextPair.rarity = nextRarity.rarity;
+    nextPair.probability = nextRarity.probability;
 
     // Preload both current and next pair for seamless transitions
     await Promise.all([
@@ -2656,6 +2752,12 @@ export class HamiltonianPlayer {
           key: entry.key,
           tempo: entry.tempo,
         };
+
+        // Calculate and add rarity
+        const rarity = this.calculateComboRarity(pair);
+        pair.comboHash = rarity.comboHash;
+        pair.rarity = rarity.rarity;
+        pair.probability = rarity.probability;
 
         completeMix.push(pair);
       } catch (err) {

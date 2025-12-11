@@ -645,7 +645,8 @@ input:focus + .slider {
 
 .playlist-pair {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   transition: background 0.2s;
@@ -661,12 +662,12 @@ input:focus + .slider {
 
 .pair-meta {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 48px;
+  flex-direction: row;
+  gap: 12px;
+  width: 100%;
   flex-shrink: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .pair-key {
@@ -676,9 +677,10 @@ input:focus + .slider {
   background: transparent;
   border: 2px solid var(--accent);
   border-radius: 4px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   min-width: 32px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .playlist-pair.played .pair-key {
@@ -687,9 +689,10 @@ input:focus + .slider {
 }
 
 .pair-tempo {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .pair-tracks {
@@ -1312,6 +1315,67 @@ input:focus + .slider {
 }
 
 /* Mobile Responsiveness */
+/* Rarity Badge - Quantum-style probability indicator */
+.rarity-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid;
+  opacity: 0.8;
+  cursor: help;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.rarity-badge:hover {
+  opacity: 1;
+}
+
+/* Rarity tiers with color coding */
+.rarity-badge.common {
+  border-color: #666;
+  color: #999;
+}
+
+.rarity-badge.uncommon {
+  border-color: #4a9eff;
+  color: #4a9eff;
+  box-shadow: 0 0 4px rgba(74, 158, 255, 0.3);
+}
+
+.rarity-badge.rare {
+  border-color: #9d4edd;
+  color: #9d4edd;
+  box-shadow: 0 0 6px rgba(157, 78, 221, 0.4);
+}
+
+.rarity-badge.epic {
+  border-color: #ff006e;
+  color: #ff006e;
+  box-shadow: 0 0 8px rgba(255, 0, 110, 0.5);
+}
+
+.rarity-badge.legendary {
+  border-color: #ffbe0b;
+  color: #ffbe0b;
+  box-shadow: 0 0 10px rgba(255, 190, 11, 0.6);
+  animation: legendaryPulse 2s ease-in-out infinite;
+}
+
+@keyframes legendaryPulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(255, 190, 11, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(255, 190, 11, 0.9);
+  }
+}
+
 @media (max-width: 768px) {
   .user-menu {
     right: 8px;
